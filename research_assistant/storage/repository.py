@@ -86,6 +86,7 @@ class ResearchTaskRepository:
         final_report: str,
         sources: list,
         sub_questions: list | None = None,
+        usage: dict | None = None,
         status: TaskStatus = TaskStatus.done,
     ) -> ResearchTask:
         task = await self._require(task_id)
@@ -93,6 +94,10 @@ class ResearchTaskRepository:
         task.sources = sources
         if sub_questions is not None:
             task.sub_questions = sub_questions
+        if usage:
+            task.prompt_tokens = usage.get("prompt_tokens", 0)
+            task.completion_tokens = usage.get("completion_tokens", 0)
+            task.total_tokens = usage.get("total_tokens", 0)
         task.status = status
         return await self._save(task)
 

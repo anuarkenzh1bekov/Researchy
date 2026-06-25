@@ -28,6 +28,9 @@ class TaskView(BaseModel):
     sub_questions: list = []
     final_report: str | None = None
     sources: list = []
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
     error_message: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -43,6 +46,9 @@ class TaskView(BaseModel):
             sub_questions=task.sub_questions or [],
             final_report=task.final_report,
             sources=task.sources or [],
+            prompt_tokens=getattr(task, "prompt_tokens", 0) or 0,
+            completion_tokens=getattr(task, "completion_tokens", 0) or 0,
+            total_tokens=getattr(task, "total_tokens", 0) or 0,
             error_message=task.error_message,
             created_at=task.created_at,
             updated_at=task.updated_at,

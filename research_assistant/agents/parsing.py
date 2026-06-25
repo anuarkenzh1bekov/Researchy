@@ -40,19 +40,36 @@ def _parse(content: str, schema: type[BaseModel]) -> BaseModel:
     return schema.model_validate(json.loads(_extract_json(content)))
 
 
+def _usage(resp) -> dict:
+    """Token counts off one LLMResponse (None → 0)."""
+    return {
+        "prompt_tokens": resp.prompt_tokens or 0,
+        "completion_tokens": resp.completion_tokens or 0,
+        "total_tokens": resp.total_tokens or 0,
+    }
+
+
+def _add_usage(a: dict, b: dict) -> dict:
+    return {k: a.get(k, 0) + b.get(k, 0) for k in a}
+
+
 async def complete_json(
     provider: LLMProvider,
     messages: list[Message],
     *,
     config: LLMProviderConfig,
     schema: type[BaseModel],
-) -> BaseModel:
+) -> tuple[BaseModel, dict]:
     """Call the provider and parse/validate its reply as `schema`. On a
     parse/validation failure, re-ask ONCE with a strict-JSON hint; if that also
-    fails, raise LLMProviderError."""
+    fails, raise LLMProviderError.
+
+    Returns `(parsed, usage)` where usage is the summed token counts of every
+    call made here (so the retry's tokens are billed too)."""
     resp = await provider.complete(messages, config=config)
+    usage = _usage(resp)
     try:
-        return _parse(resp.content, schema)
+        return _parse(resp.content, schema), usage
     except (json.JSONDecodeError, ValidationError):
         retry_messages = [
             *messages,
@@ -60,8 +77,9 @@ async def complete_json(
             Message(role="user", content=_RETRY_HINT),
         ]
         resp = await provider.complete(retry_messages, config=config)
+        usage = _add_usage(usage, _usage(resp))
         try:
-            return _parse(resp.content, schema)
+            return _parse(resp.content, schema), usage
         except (json.JSONDecodeError, ValidationError) as e:
             raise LLMProviderError(
                 f"model did not return valid JSON for {schema.__name__}: {e}"

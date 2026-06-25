@@ -54,6 +54,9 @@ async def test_pipeline_runs_planner_researchers_critic_synthesizer():
     assert result["sources"] == [
         {"title": "Paper", "url": "http://x/1", "snippet": "snip", "source_type": "web"}
     ]  # deduped by url across both researchers
+    # token usage summed across all 5 LLM calls (planner + 2 researchers + critic
+    # + synthesizer), each fake call billing 10 in / 5 out / 15 total.
+    assert result["usage"] == {"prompt_tokens": 50, "completion_tokens": 25, "total_tokens": 75}
     # every node announced itself
     assert ("planner", "started") in events
     assert ("synthesizer", "completed") in events

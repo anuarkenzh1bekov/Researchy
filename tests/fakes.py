@@ -19,7 +19,10 @@ class FakeProvider:
     ) -> LLMResponse:
         self.calls.append(messages)
         content = self._responses.pop(0)
-        return LLMResponse(content=content, model="fake")
+        return LLMResponse(
+            content=content, model="fake",
+            prompt_tokens=10, completion_tokens=5, total_tokens=15,
+        )
 
 
 class RoutingFakeProvider:
@@ -38,7 +41,10 @@ class RoutingFakeProvider:
         for marker, reply in self._by.items():
             if marker in text:
                 self.calls.append(marker)
-                return LLMResponse(content=reply, model="fake")
+                return LLMResponse(
+                    content=reply, model="fake",
+                    prompt_tokens=10, completion_tokens=5, total_tokens=15,
+                )
         raise AssertionError(f"RoutingFakeProvider: no marker matched in: {text[:100]}")
 
 

@@ -64,6 +64,11 @@ class ResearchTask(SQLModel, table=True):
     final_report: str | None = None
     sources: list = Field(default_factory=list, sa_column=Column(JSONB))
 
+    # Token usage summed across every LLM call in the pipeline (cost visibility).
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+
     # EXTENSION: semantic recall. Nullable, unused by the MVP pipeline; present
     # so memory/recall is a query addition, not a schema migration.
     embedding: list[float] | None = Field(

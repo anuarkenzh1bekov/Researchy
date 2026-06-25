@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 
 import httpx
 
@@ -20,12 +21,73 @@ def _client() -> ResearchClient:
     return ResearchClient(config.load())
 
 
+def _await_final(client: ResearchClient, task_id: str, *, tries: int = 30, delay: float = 0.4):
+    """Fetch the task, polling until it's terminal.
+
+    The synthesizer's `completed` event (which ends the live stream) fires INSIDE
+    the graph, a beat before the worker persists the report (save_result runs
+    after the graph returns, writing final_report + status=done in one commit).
+    Without this poll the CLI can read the task mid-write and render an
+    '(empty report)'. So: wait for status to settle before rendering."""
+    task = client.get_task(task_id)
+    for _ in range(tries):
+        if task.get("status") in ("done", "failed"):
+            return task
+        time.sleep(delay)
+        task = client.get_task(task_id)
+    return task
+
+
+def _slugify(text: str, maxlen: int = 60) -> str:
+    """Filesystem-safe stem derived from the query: 'Who is Ronaldo?' -> 'who-is-ronaldo'."""
+    import re
+
+    s = re.sub(r"[^\w\s-]", "", text.lower())
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")
+    return s[:maxlen].strip("-") or "report"
+
+
+def _save_report(task: dict):
+    """Write a finished report to exports/<query-slug>.md — the file name follows
+    the query, so each question lands in its own file. Returns the path or None."""
+    if task.get("status") != "done" or not task.get("final_report"):
+        return None
+    from datetime import datetime
+    from pathlib import Path
+
+    exports = Path("exports")
+    exports.mkdir(exist_ok=True)
+    path = exports / f"{_slugify(task.get('query', 'report'))}.md"
+
+    lines = [
+        f"# Research report — {task.get('query', '')}",
+        "",
+        f"*task {str(task.get('id', ''))[:8]} · {datetime.now():%Y-%m-%d %H:%M}*",
+        "",
+        task.get("final_report", ""),
+    ]
+    sources = task.get("sources") or []
+    if sources:
+        lines += ["", "## Sources", ""]
+        for i, s in enumerate(sources, 1):
+            lines.append(f"{i}. [{s.get('title', '')}]({s.get('url', '')})")
+    total = task.get("total_tokens") or 0
+    if total:
+        lines += ["", f"*tokens: {total:,}*"]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def _run_research(client: ResearchClient, query: str) -> None:
-    """Submit a query, stream live progress, then render the report."""
+    """Submit a query, stream live progress, render the report, save it to a file."""
     task = client.create_research(query)
     task_id = task["id"]
     render.run_progress(client.stream_events(task_id))
-    render.render_report(client.get_task(task_id))
+    final = _await_final(client, task_id)
+    render.render_report(final)
+    saved = _save_report(final)
+    if saved:
+        print(f"saved → {saved}")
 
 
 def _guard(fn) -> int:

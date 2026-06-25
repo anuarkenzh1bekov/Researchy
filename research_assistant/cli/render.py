@@ -51,6 +51,11 @@ _PROCESS_WORDS = (
 )
 
 
+def _fmt_tokens(n: int) -> str:
+    """Compact token count: 950 -> '950', 12_340 -> '12.3k'."""
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+
+
 def _detail(payload: dict) -> str:
     if "sub_questions" in payload:
         return f"{len(payload['sub_questions'])} sub-questions"
@@ -260,6 +265,7 @@ def run_progress(events: Iterator[dict]) -> dict | None:
     status: dict[str, str] = {}
     detail: dict[str, str] = {}
     last: dict | None = None
+    tokens = 0  # running token total, ticked up live from each event's payload
     start = time.monotonic()
     word0 = random.randrange(len(_PROCESS_WORDS))
     stage_spinner = Spinner("dots", style=_ACCENT)
@@ -290,8 +296,9 @@ def run_progress(events: Iterator[dict]) -> dict | None:
             last.get("event_type") == "failed"
             or (last.get("agent_name") == "synthesizer" and last.get("event_type") == "completed")
         )
+        tok = f" · {_fmt_tokens(tokens)} tokens" if tokens else ""
         if done:
-            foot = Text(f"done · {elapsed:.0f}s", style="dim")
+            foot = Text(f"done · {elapsed:.0f}s{tok}", style="dim")
         else:
             word = _PROCESS_WORDS[(word0 + int(elapsed / 3.0)) % len(_PROCESS_WORDS)]
             line = Table.grid(padding=(0, 1))
@@ -299,7 +306,7 @@ def run_progress(events: Iterator[dict]) -> dict | None:
             line.add_column()
             line.add_row(
                 foot_spinner,
-                Text.assemble((f"{word}… ", f"bold {_ACCENT}"), (f"({elapsed:.0f}s)", "dim")),
+                Text.assemble((f"{word}… ", f"bold {_ACCENT}"), (f"({elapsed:.0f}s{tok})", "dim")),
             )
             foot = line
         body = Group(t, Text(""), foot)
@@ -321,7 +328,11 @@ def run_progress(events: Iterator[dict]) -> dict | None:
             last = ev
             agent = ev.get("agent_name", "")
             status[agent] = ev.get("event_type", "")
-            detail[agent] = _detail(ev.get("payload") or {})
+            payload = ev.get("payload") or {}
+            detail[agent] = _detail(payload)
+            usage = payload.get("usage")
+            if usage:
+                tokens += usage.get("total_tokens", 0) or 0
     return last
 
 
@@ -352,6 +363,26 @@ def render_report(task: dict) -> None:
             title, url = s.get("title", ""), s.get("url", "")
             console.print(f"  [bold {_ACCENT}]{i:>2}[/] {title}  [dim][link]{url}[/][/]")
         console.print()
+
+    _print_usage(console, task)
+
+
+# gpt-4o-mini USD per 1M tokens (input, output) — the configured default model.
+# Token counts below are exact/model-agnostic; this only scales the $ estimate.
+_PRICE_IN, _PRICE_OUT = 0.15, 0.60
+
+
+def _print_usage(console, task: dict) -> None:
+    total = task.get("total_tokens") or 0
+    if not total:
+        return
+    pin = task.get("prompt_tokens") or 0
+    pout = task.get("completion_tokens") or 0
+    cost = pin / 1_000_000 * _PRICE_IN + pout / 1_000_000 * _PRICE_OUT
+    console.print(
+        f"[dim]tokens {total:,} ({pin:,} in / {pout:,} out) · "
+        f"~${cost:.4f} at gpt-4o-mini rates[/]"
+    )
 
 
 _STATUS_STYLE = {"done": "green", "failed": "red", "running": "yellow", "pending": "dim"}

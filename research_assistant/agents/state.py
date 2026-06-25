@@ -37,12 +37,24 @@ def merge_findings(
     return list(merged.values())
 
 
+_USAGE_KEYS = ("prompt_tokens", "completion_tokens", "total_tokens")
+
+
+def merge_usage(current: dict | None, incoming: dict) -> dict:
+    """Reducer for the `usage` channel: sum token counts from every LLM call
+    across all nodes (planner + each researcher + critic + synthesizer), so the
+    final state carries the whole task's token bill."""
+    base = current or dict.fromkeys(_USAGE_KEYS, 0)
+    return {k: base.get(k, 0) + (incoming.get(k, 0) or 0) for k in _USAGE_KEYS}
+
+
 class ResearchState(TypedDict, total=False):
     """Graph-wide state. `total=False` so nodes return partial updates."""
 
     query: str
     sub_questions: list[str]
     findings: Annotated[list[Finding], merge_findings]
+    usage: Annotated[dict, merge_usage]  # accumulated token counts across all LLM calls
     approved: bool
     gaps: list[str]          # sub-questions the Critic flagged for re-research
     revision: int            # incremented each Critic->Researcher loop
@@ -72,3 +84,10 @@ if __name__ == "__main__":
     assert m2[0]["answer"] == "fresh", m2         # newest wins
     assert [f["sub_question"] for f in m2] == ["q1", "q2"], m2  # order kept
     print("merge_findings OK")
+
+    assert merge_usage(None, {"prompt_tokens": 3, "total_tokens": 3}) == {
+        "prompt_tokens": 3, "completion_tokens": 0, "total_tokens": 3}
+    u = merge_usage({"prompt_tokens": 3, "completion_tokens": 0, "total_tokens": 3},
+                    {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3})
+    assert u == {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6}, u
+    print("merge_usage OK")

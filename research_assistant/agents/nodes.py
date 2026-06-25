@@ -75,6 +75,9 @@ def _critic_messages(query: str, findings: list[Finding]) -> list[Message]:
                 "You are the Critic. Review the findings together for gaps, "
                 "contradictions, or unsupported claims. Reply with ONLY JSON: "
                 '{"approved": bool, "gaps": ["sub-question needing more work", ...]}. '
+                "Each gap MUST be a self-contained question that names the subject "
+                "of the goal (e.g. 'Ronaldo's philanthropy', not just 'philanthropy') "
+                "so it stays on-topic when researched. "
                 "Approve when the findings adequately answer the goal."
             ),
         ),
@@ -100,11 +103,20 @@ def _synthesizer_messages(query: str, findings: list[Finding]) -> list[Message]:
 # --- helpers -----------------------------------------------------------------
 
 
-async def _gather_sources(tools: list[ResearchTool], sub_question: str) -> list[ToolResult]:
+async def _gather_sources(
+    tools: list[ResearchTool], sub_question: str, *, topic: str = ""
+) -> list[ToolResult]:
     """Run the sub-question through every tool concurrently. A single tool
-    failing must not sink the whole finding — drop it and keep the rest."""
+    failing must not sink the whole finding — drop it and keep the rest.
+
+    The search query keeps the overall `topic` in front of the sub-question so
+    follow-up/gap sub-questions (which the Critic often phrases WITHOUT the
+    subject, e.g. "his philanthropic efforts") don't drift off-topic and pull
+    generic results. Without this, "who is ronaldo?" → gap "career achievements"
+    returns random career-award pages instead of Ronaldo's."""
+    search_q = f"{topic} {sub_question}".strip() if topic else sub_question
     outcomes = await asyncio.gather(
-        *(t.search(sub_question) for t in tools), return_exceptions=True
+        *(t.search(search_q) for t in tools), return_exceptions=True
     )
     results: list[ToolResult] = []
     for tool, outcome in zip(tools, outcomes):
@@ -117,6 +129,15 @@ async def _gather_sources(tools: list[ResearchTool], sub_question: str) -> list[
 
 def _as_source(r: ToolResult) -> dict:
     return {"title": r.title, "url": r.url, "snippet": r.snippet, "source_type": r.source_type}
+
+
+def _usage(resp) -> dict:
+    """Token counts off one LLMResponse (None → 0), for the `usage` channel."""
+    return {
+        "prompt_tokens": resp.prompt_tokens or 0,
+        "completion_tokens": resp.completion_tokens or 0,
+        "total_tokens": resp.total_tokens or 0,
+    }
 
 
 def _dedupe_sources(findings: list[Finding]) -> list[dict]:
@@ -140,11 +161,11 @@ async def planner_node(
 ) -> dict:
     await publish("planner", "started", {})
     try:
-        out: PlannerOutput = await complete_json(  # type: ignore[assignment]
+        out, usage = await complete_json(
             provider, _planner_messages(state["query"]), config=llm_config, schema=PlannerOutput
         )
-        await publish("planner", "completed", {"sub_questions": out.sub_questions})
-        return {"sub_questions": out.sub_questions}
+        await publish("planner", "completed", {"sub_questions": out.sub_questions, "usage": usage})
+        return {"sub_questions": out.sub_questions, "usage": usage}
     except Exception as e:
         await publish("planner", "failed", {"error": str(e)})
         raise
@@ -161,17 +182,18 @@ async def researcher_node(
     sq = inp["sub_question"]
     await publish("researcher", "started", {"sub_question": sq})
     try:
-        results = await _gather_sources(tools, sq)
+        results = await _gather_sources(tools, sq, topic=inp["query"])
         resp = await provider.complete(
             _researcher_messages(inp["query"], sq, results), config=llm_config
         )
+        usage = _usage(resp)
         finding: Finding = {
             "sub_question": sq,
             "answer": resp.content,
             "sources": [_as_source(r) for r in results],
         }
-        await publish("researcher", "completed", {"sub_question": sq})
-        return {"findings": [finding]}
+        await publish("researcher", "completed", {"sub_question": sq, "usage": usage})
+        return {"findings": [finding], "usage": usage}
     except Exception as e:
         # Degrade, don't abort: in the parallel Send fan-out a single raising
         # branch sinks the whole superstep (the entire task fails). One
@@ -194,7 +216,7 @@ async def critic_node(
 ) -> dict:
     await publish("critic", "started", {})
     try:
-        out: CriticOutput = await complete_json(  # type: ignore[assignment]
+        out, usage = await complete_json(
             provider,
             _critic_messages(state["query"], state["findings"]),
             config=llm_config,
@@ -204,8 +226,11 @@ async def critic_node(
             "approved": out.approved,
             "gaps": out.gaps,
             "revision": state.get("revision", 0) + 1,
+            "usage": usage,
         }
-        await publish("critic", "completed", {"approved": out.approved, "gaps": out.gaps})
+        await publish(
+            "critic", "completed", {"approved": out.approved, "gaps": out.gaps, "usage": usage}
+        )
         return result
     except Exception as e:
         await publish("critic", "failed", {"error": str(e)})
@@ -220,11 +245,13 @@ async def synthesizer_node(
         resp = await provider.complete(
             _synthesizer_messages(state["query"], state["findings"]), config=llm_config
         )
+        usage = _usage(resp)
         result = {
             "final_report": resp.content,
             "sources": _dedupe_sources(state["findings"]),
+            "usage": usage,
         }
-        await publish("synthesizer", "completed", {})
+        await publish("synthesizer", "completed", {"usage": usage})
         return result
     except Exception as e:
         await publish("synthesizer", "failed", {"error": str(e)})

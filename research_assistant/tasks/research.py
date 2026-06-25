@@ -119,6 +119,7 @@ async def _run_pipeline(task_id: uuid.UUID) -> None:
             final_report=final.get("final_report", ""),
             sources=final.get("sources", []),
             sub_questions=final.get("sub_questions", []),
+            usage=final.get("usage"),
             status=TaskStatus.done,
         )
     log.info("research_task_done", task_id=str(task_id))
