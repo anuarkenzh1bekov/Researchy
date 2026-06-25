@@ -1,0 +1,74 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "research-assistant"
+version = "0.1.0"
+description = "Multi-Agent Research Assistant — LangGraph pipeline behind FastAPI, model-agnostic LLM layer, durable Celery execution, real-time SSE progress, optional Telegram bot."
+readme = "README.md"
+# NOTE: dev environment here is Python 3.14, but several deps (litellm,
+# langgraph-checkpoint-postgres, asyncpg) may not ship wheels for it yet.
+# 3.11/3.12 is the recommended runtime; floor kept at 3.11 for modern typing.
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+dependencies = [
+    # --- web / api ---
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    # --- storage ---
+    "sqlmodel>=0.0.21",
+    "asyncpg>=0.29",            # async app engine
+    "psycopg[binary]>=3.2",     # sync/async driver for LangGraph checkpointer
+    "pgvector>=0.3",
+    "alembic>=1.13",
+    # --- orchestration ---
+    "langgraph>=0.2.40",
+    "langgraph-checkpoint-postgres>=2.0",
+    # --- llm ---
+    "litellm>=1.50",
+    # --- task queue / cache / events ---
+    "celery[redis]>=5.4",
+    "redis>=5.0",
+    # --- telegram ---
+    "aiogram>=3.13",
+    # --- cli client ---
+    "rich>=13.0",               # live progress + Markdown report in the terminal
+    # --- tools / io ---
+    "httpx>=0.27",
+    "tavily-python>=0.5",
+    "feedparser>=6.0",          # arxiv atom feed parsing
+    # --- config / resilience / logging ---
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
+    "tenacity>=9.0",
+    "structlog>=24.4",
+    "cryptography>=43",         # Fernet: bot-token encryption at rest (core/crypto)
+]
+
+[project.scripts]
+research = "research_assistant.cli.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["research_assistant"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+testpaths = ["tests"]
