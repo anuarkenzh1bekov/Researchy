@@ -1,6 +1,6 @@
 """`research` — terminal client entrypoint.
 
-No args (or `repl`) → interactive REPL, Claude-Code style. Otherwise subcommands:
+No args (or `repl`) → interactive REPL. Otherwise subcommands:
 ask / history / show / login / bot {connect,status,disconnect}. All of it is a
 thin shell over ResearchClient; errors (server down, bad key) are turned into
 one-line human messages instead of tracebacks.
@@ -106,7 +106,25 @@ def _guard(fn) -> int:
 # --- subcommand handlers -----------------------------------------------------
 
 
+def _run_local(query: str, depth: str | None) -> int:
+    """Run the pipeline in-process (no API/Celery/Redis) and render the report."""
+    from research_assistant.cli.local import run_local
+
+    try:
+        task = run_local(query, depth)
+    except Exception as e:  # noqa: BLE001 — one-line message, no traceback
+        print(f"✗ local run failed: {e}")
+        return 1
+    render.render_report(task)
+    saved = _save_report(task)
+    if saved:
+        print(f"saved → {saved}")
+    return 0
+
+
 def _cmd_ask(args) -> int:
+    if args.local:
+        return _run_local(args.query, args.depth)
     return _guard(lambda: _with_client(lambda c: _run_research(c, args.query)))
 
 
@@ -152,6 +170,7 @@ def _with_client(fn) -> None:
 def _repl() -> int:
     cfg = config.load()
     render.print_banner(base_url=cfg.base_url, has_key=bool(cfg.api_key))
+    topic: str | None = None  # the running conversation subject, for follow-ups
     while True:
         try:
             query = render.prompt()
@@ -162,7 +181,21 @@ def _repl() -> int:
             continue
         if query in {"exit", "quit", ":q"}:
             return 0
-        _guard(lambda: _with_client(lambda c: _run_research(c, query)))
+        if query in {"new", "reset", ":new"}:
+            topic = None
+            render.print_chat("Context cleared — ask a fresh question.")
+            continue
+        reply = render.chitchat(query)
+        if reply is not None:
+            render.print_chat(reply)
+            continue
+        if topic and render.is_followup(query):
+            research_query = render.compose_followup(topic, query)
+            render.print_chat(f"↳ following up on: {topic[:60]}")
+        else:
+            research_query = query
+            topic = query  # a fresh question becomes the new topic
+        _guard(lambda: _with_client(lambda c: _run_research(c, research_query)))
 
 
 # --- argument parsing --------------------------------------------------------
@@ -176,6 +209,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     ask = sub.add_parser("ask", help="ask one question and stream the result")
     ask.add_argument("query")
+    ask.add_argument(
+        "--local",
+        action="store_true",
+        help="run the pipeline in-process (no API/Celery/Redis needed)",
+    )
+    ask.add_argument(
+        "--depth",
+        choices=["quick", "standard", "deep"],
+        default=None,
+        help="effort level for --local runs (default: standard)",
+    )
 
     sub.add_parser("history", help="list your past research tasks")
 

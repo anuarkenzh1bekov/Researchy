@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     # --- tools ---
     tavily_api_key: str | None = None
     arxiv_min_interval_seconds: float = 3.0
+    # Process-local cache TTL for tool search results; 0 disables caching.
+    search_cache_ttl_seconds: float = 900.0
 
     # --- security ---
     # When False, the API runs open and every request maps to one dev principal

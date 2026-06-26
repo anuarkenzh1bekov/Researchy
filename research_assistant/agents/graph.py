@@ -33,6 +33,8 @@ def build_graph(
     max_revisions: int,
     config: LLMProviderConfig | None = None,
     checkpointer=None,
+    target_subquestions: int = 4,
+    max_results: int = 5,
 ):
     if config is None:
         # imported lazily: tests pass an explicit config and never touch settings.
@@ -45,11 +47,25 @@ def build_graph(
 
     g = StateGraph(ResearchState)
     g.add_node(
-        "planner", partial(planner_node, provider=provider, llm_config=strict, publish=publish)
+        "planner",
+        partial(
+            planner_node,
+            provider=provider,
+            llm_config=strict,
+            publish=publish,
+            target_subquestions=target_subquestions,
+        ),
     )
     g.add_node(
         "researcher",
-        partial(researcher_node, provider=provider, tools=tools, llm_config=config, publish=publish),
+        partial(
+            researcher_node,
+            provider=provider,
+            tools=tools,
+            llm_config=config,
+            publish=publish,
+            max_results=max_results,
+        ),
     )
     g.add_node(
         "critic", partial(critic_node, provider=provider, llm_config=strict, publish=publish)

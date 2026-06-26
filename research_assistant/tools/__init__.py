@@ -29,4 +29,11 @@ def get_tools() -> list[ResearchTool]:
     else:
         log.info("tavily_disabled", reason="no TAVILY_API_KEY set")
     tools.append(ArxivTool(s.arxiv_min_interval_seconds))
+
+    # Wrap each tool in a short-lived cache so the revision loop and overlapping
+    # tasks don't re-hit the providers for the same query. TTL 0 => off.
+    if s.search_cache_ttl_seconds > 0:
+        from research_assistant.tools.cache import CachingTool
+
+        tools = [CachingTool(t, s.search_cache_ttl_seconds) for t in tools]
     return tools

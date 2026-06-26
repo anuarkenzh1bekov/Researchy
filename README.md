@@ -42,7 +42,8 @@ research_assistant/
 ├── tasks/    # Celery app + run_research_task (the only agents↔storage wiring)
 ├── api/      # FastAPI app: research CRUD + SSE + bot connect/disconnect/status
 ├── bot/      # dynamic per-token Telegram bot lifecycle + aiogram handlers
-├── cli/      # terminal client (httpx + rich) — just another API consumer
+├── cli/      # terminal client (httpx + rich); also an in-process `--local` runner
+├── eval/     # offline golden-set harness + LLM-judge (faithfulness/coverage)
 └── scripts/  # CLI entrypoints (issue_api_key)
 ```
 
@@ -100,7 +101,7 @@ point: one backend, many frontends.
 
 ```bash
 research login --key $KEY          # save API url + key to ~/.researchy/config.json
-research                           # interactive REPL (Claude-Code style)
+research                           # interactive REPL
 research ask "how does pgvector affect RAG latency?"   # one-shot, live-streamed
 research history                   # your past tasks
 research show <id>                 # a task's report
@@ -113,6 +114,44 @@ repo root (`research ask "..."`); it just forwards to `python -m research_assist
 `ask`/`repl` open the SSE stream and render Planner → Researchers → Critic →
 Synthesizer progress live, then print the report as Markdown. Config can also
 come from `RESEARCHY_API_URL` / `RESEARCHY_API_KEY` env vars (CI-friendly).
+
+In the REPL, a line that opens like a follow-up (`and his trophies?`, `why?`)
+is folded into the previous question so the pipeline keeps the subject; `new`
+clears the running topic.
+
+### Run with no infra (`--local`)
+
+To try the pipeline without Postgres/Redis/Celery — only LLM + tool keys — run
+it in-process:
+
+```bash
+research ask "how does pgvector affect RAG latency?" --local
+research ask "compare Rust and Go for systems work" --local --depth deep
+```
+
+`--depth quick|standard|deep` (default `standard`) scales one knob across the
+whole run: number of sub-questions, sources per sub-question, and Critic→
+Researcher revision rounds.
+
+## Evaluation
+
+An offline harness runs the pipeline over a fixed set of golden questions and
+scores each report with an LLM-judge on **faithfulness** (are the claims
+grounded in the cited sources?) and **coverage** (does it answer the question?).
+It runs in-process — no infra — so it's a quick quality gate:
+
+```bash
+python -m research_assistant.eval
+```
+
+Add cases in `research_assistant/eval/cases.py`.
+
+## Performance
+
+Tool search results are cached per worker process with a short TTL
+(`SEARCH_CACHE_TTL_SECONDS`, default 900; `0` disables), so the Critic→
+Researcher revision loop and overlapping tasks don't re-hit Tavily/arXiv for the
+same query.
 
 ## Security
 
@@ -133,6 +172,8 @@ JWT issuance/rotation, RBAC, rate limiting, audit logging.
 
 Schema + module seams already accommodate: session memory/semantic recall
 (`ResearchTask.embedding` pgvector column), custom user-defined agents
-(`LLMAgentConfig` table), report export, confidence scoring, token usage
-tracking, response caching. Each is a one-module addition — see `# EXTENSION:`
-comments in code. No schema migration required to add them.
+(`LLMAgentConfig` table), confidence scoring. Each is a one-module addition —
+see `# EXTENSION:` comments in code. No schema migration required to add them.
+
+Depth profiles currently apply to `--local` runs; threading them through the
+API/Celery path is a small, deliberate next step (request field + task arg).

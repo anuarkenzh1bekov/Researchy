@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from research_assistant.cli import config
+from research_assistant.cli import config, render
 from research_assistant.cli.sse import iter_events, parse_data_line
 
 
@@ -64,3 +64,25 @@ def test_load_missing_file_uses_default(tmp_path):
     loaded = config.load(tmp_path / "nope.json")
     assert loaded.base_url == config.DEFAULT_URL
     assert loaded.api_key is None
+
+
+# --- follow-up detection -----------------------------------------------------
+
+
+def test_is_followup_matches_connective_openers():
+    assert render.is_followup("and what about his trophies?")
+    assert render.is_followup("Why?")
+    assert render.is_followup("а что насчёт защиты?")
+    assert render.is_followup("подробнее про это")
+
+
+def test_is_followup_rejects_fresh_questions():
+    # contains 'why' but as a fresh, fully formed question — not an opener
+    assert not render.is_followup("Who is Cristiano Ronaldo?")
+    assert not render.is_followup("Explain how photosynthesis works")
+
+
+def test_compose_followup_anchors_on_the_topic():
+    out = render.compose_followup("Who is Ronaldo?", "and his trophies?")
+    assert "Who is Ronaldo?" in out  # original subject preserved
+    assert "and his trophies?" in out
