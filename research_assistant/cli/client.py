@@ -26,7 +26,7 @@ class ResearchClient:
         self._http = httpx.Client(base_url=cfg.base_url, headers=headers, timeout=timeout)
 
     # context-manager sugar so callers can `with ResearchClient(cfg) as c:`
-    def __enter__(self) -> "ResearchClient":
+    def __enter__(self) -> ResearchClient:
         return self
 
     def __exit__(self, *exc) -> None:

@@ -12,8 +12,8 @@ without ALTERs.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, DateTime, String
@@ -26,7 +26,7 @@ _EMBEDDING_DIM = get_settings().embedding_dim
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _ts_column(*, index: bool = False, onupdate=None) -> Column:
@@ -37,12 +37,12 @@ def _ts_column(*, index: bool = False, onupdate=None) -> Column:
     return Column(DateTime(timezone=True), nullable=False, index=index, onupdate=onupdate)
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     web = "web"
     telegram = "telegram"
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     pending = "pending"
     running = "running"
     done = "done"
@@ -136,7 +136,9 @@ class TelegramBotConfig(SQLModel, table=True):
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     user_id: str = Field(index=True, unique=True)
-    # NOTE: plaintext. # EXTENSION: encrypt at rest before production.
+    # Fernet-encrypted at rest: TelegramBotConfigRepository encrypts on write
+    # and decrypts on read (core/crypto), so this column only ever holds
+    # ciphertext. The DB never sees the plaintext token.
     bot_token: str
     is_active: bool = False
     telegram_username: str | None = None

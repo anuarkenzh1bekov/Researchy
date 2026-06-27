@@ -14,7 +14,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from research_assistant.core.exceptions import ToolError
 from research_assistant.core.logging import get_logger
-from research_assistant.tools.base import ResearchTool, ToolResult, is_transient
+from research_assistant.tools.base import ToolResult, is_transient
 
 log = get_logger(__name__)
 

@@ -36,7 +36,7 @@ class TaskView(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_task(cls, task) -> "TaskView":
+    def from_task(cls, task) -> TaskView:
         return cls(
             id=task.id,
             user_id=task.user_id,

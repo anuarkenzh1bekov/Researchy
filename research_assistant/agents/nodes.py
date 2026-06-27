@@ -18,9 +18,9 @@ import re
 
 from langgraph.types import Send
 
-from research_assistant.agents.parsing import complete_json
+from research_assistant.agents.parsing import _usage, complete_json
 from research_assistant.agents.schemas import CriticOutput, PlannerOutput
-from research_assistant.agents.state import Finding, ResearchState, ResearcherInput
+from research_assistant.agents.state import Finding, ResearcherInput, ResearchState
 from research_assistant.core.logging import get_logger
 from research_assistant.llm.base import LLMProvider, LLMProviderConfig, Message
 from research_assistant.tools.base import ResearchTool, ToolResult
@@ -145,7 +145,7 @@ async def _gather_sources(
         *(t.search(search_q, max_results=max_results) for t in tools), return_exceptions=True
     )
     results: list[ToolResult] = []
-    for tool, outcome in zip(tools, outcomes):
+    for tool, outcome in zip(tools, outcomes, strict=True):
         if isinstance(outcome, Exception):
             log.warning("tool_failed", tool=tool.name, error=str(outcome))
             continue
@@ -155,15 +155,6 @@ async def _gather_sources(
 
 def _as_source(r: ToolResult) -> dict:
     return {"title": r.title, "url": r.url, "snippet": r.snippet, "source_type": r.source_type}
-
-
-def _usage(resp) -> dict:
-    """Token counts off one LLMResponse (None → 0), for the `usage` channel."""
-    return {
-        "prompt_tokens": resp.prompt_tokens or 0,
-        "completion_tokens": resp.completion_tokens or 0,
-        "total_tokens": resp.total_tokens or 0,
-    }
 
 
 _CITE = re.compile(r"\[(\d+)\]")

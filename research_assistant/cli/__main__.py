@@ -17,6 +17,7 @@ import httpx
 from research_assistant.cli import config, render
 from research_assistant.cli.client import APIError, ResearchClient
 
+
 def _client() -> ResearchClient:
     return ResearchClient(config.load())
 
@@ -143,7 +144,8 @@ def _cmd_login(args) -> int:
     if args.key:
         cfg.api_key = args.key
     config.save(cfg)
-    print(f"saved → {config.CONFIG_PATH}  (url={cfg.base_url}, key={'set' if cfg.api_key else 'unset'})")
+    key_state = "set" if cfg.api_key else "unset"
+    print(f"saved → {config.CONFIG_PATH}  (url={cfg.base_url}, key={key_state})")
     return 0
 
 
@@ -195,7 +197,7 @@ def _repl() -> int:
         else:
             research_query = query
             topic = query  # a fresh question becomes the new topic
-        _guard(lambda: _with_client(lambda c: _run_research(c, research_query)))
+        _guard(lambda rq=research_query: _with_client(lambda c: _run_research(c, rq)))
 
 
 # --- argument parsing --------------------------------------------------------

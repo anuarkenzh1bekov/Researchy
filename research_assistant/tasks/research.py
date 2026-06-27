@@ -66,14 +66,13 @@ def _run(coro):
 
 async def _run_pipeline(task_id: uuid.UUID) -> None:
     from research_assistant.agents.graph import build_graph
+    from research_assistant.core.exceptions import TaskExecutionError
+    from research_assistant.events.publisher import make_publisher
     from research_assistant.llm.factory import config_from_settings, get_provider
     from research_assistant.storage.db import get_sessionmaker
     from research_assistant.storage.models import TaskStatus
     from research_assistant.storage.repository import ResearchTaskRepository
     from research_assistant.tools import get_tools
-
-    from research_assistant.core.exceptions import TaskExecutionError
-    from research_assistant.events.publisher import make_publisher
 
     # 1. load + mark running
     async with get_sessionmaker()() as session:
@@ -170,7 +169,7 @@ def run_research_task(self, task_id: str):
     except _TRANSIENT as exc:
         log.warning("research_task_transient", task_id=task_id, error=str(exc))
         if self.request.retries < self.max_retries:
-            raise self.retry(exc=exc)
+            raise self.retry(exc=exc) from exc
         _run(_fail(tid, str(exc)))
         raise
     except Exception as exc:  # non-transient: fail fast, persist, surface

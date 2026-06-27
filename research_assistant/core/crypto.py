@@ -41,7 +41,10 @@ def _fernet():
     """Fernet built from the configured key, or None if unset (pass-through)."""
     key = get_settings().api_encryption_key
     if not key:
-        log.warning("encryption_disabled", reason="API_ENCRYPTION_KEY not set — secrets stored as plaintext")
+        log.warning(
+            "encryption_disabled",
+            reason="API_ENCRYPTION_KEY not set — secrets stored as plaintext",
+        )
         return None
     from cryptography.fernet import Fernet
 

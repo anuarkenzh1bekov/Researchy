@@ -36,14 +36,14 @@ def build_router():
     router = Router()
 
     @router.message(CommandStart())
-    async def on_start(message: "Message") -> None:
+    async def on_start(message: Message) -> None:
         await message.answer(
             "👋 Hi! Send me any research question and I'll investigate it "
             "across the web and academic sources, then send back a report."
         )
 
     @router.message(F.text)
-    async def on_text(message: "Message") -> None:
+    async def on_text(message: Message) -> None:
         from research_assistant.storage.db import get_sessionmaker
         from research_assistant.storage.models import SourceType
         from research_assistant.storage.repository import ResearchTaskRepository
