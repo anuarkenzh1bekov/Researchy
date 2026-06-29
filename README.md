@@ -38,8 +38,6 @@ in `--local` mode (no infra):
 
 ![Researchy running locally](docs/demo.gif)
 
-> Recorded in `--local` mode with `research ask "compare Rust and Go for systems work" --local --depth quick`.
-
 ## ✨ Key features
 
 **1. Multi-agent pipeline.** Planner → parallel Researchers → Critic → Synthesizer, wired
