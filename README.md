@@ -8,6 +8,7 @@ Decompose → research in parallel → critique for gaps → synthesize. Orchest
 **LangGraph**, served over **FastAPI**, model-agnostic, durable, and streamed in real time.
 
 <!-- badges -->
+[![CI](https://github.com/anuarkenzh1bekov/Researchy/actions/workflows/ci.yml/badge.svg)](https://github.com/anuarkenzh1bekov/Researchy/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-orchestration-1C3C3C)

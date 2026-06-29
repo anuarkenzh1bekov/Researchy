@@ -95,10 +95,11 @@ class AgentEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_now, sa_column=_ts_column(index=True))
 
 
-class LLMAgentConfig(SQLModel, table=True):
-    """Per-task, per-agent LLM settings. SCHEMA ONLY — not wired into the graph
-    yet. # EXTENSION: agents/ resolve_agent_config() will read this and fall
-    back to settings."""
+class LLMAgentConfig(SQLModel):
+    """Per-task, per-agent LLM settings. SCHEMA SKETCH ONLY — deliberately NOT a
+    table (no `table=True`), so it doesn't create an empty, unwritten relation.
+    # EXTENSION: when agents/ grows resolve_agent_config(), flip this to
+    `table=True` and it falls back to settings when no row exists."""
 
     __tablename__ = "llm_agent_config"
 

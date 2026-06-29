@@ -11,7 +11,6 @@ import json
 from research_assistant.cli import config, render
 from research_assistant.cli.sse import iter_events, parse_data_line
 
-
 # --- SSE parsing -------------------------------------------------------------
 
 

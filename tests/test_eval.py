@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from research_assistant.core.exceptions import LLMProviderError
 from research_assistant.eval.cases import EvalCase
 from research_assistant.eval.judge import JudgeOutput, judge_report
 from research_assistant.eval.runner import CaseResult, _print_summary
@@ -28,7 +29,7 @@ async def test_judge_rejects_out_of_range():
     provider = FakeProvider(
         ['{"faithfulness": 9, "coverage": 5}', '{"faithfulness": 9, "coverage": 5}']
     )
-    with pytest.raises(Exception):
+    with pytest.raises(LLMProviderError):
         await judge_report(provider, query="q", report="r", sources=[], config=CFG)
 
 
