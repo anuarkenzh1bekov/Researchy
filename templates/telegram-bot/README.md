@@ -37,6 +37,6 @@ All config lives in this folder's `.env` (see `.env.example`):
 ## Limits (by design)
 
 Because it runs `--local`, there's no persistence (history isn't saved) and no
-live progress stream — you get `🔍 Researching…` → final report. Reports are
-truncated to Telegram's 4096-char message limit. That's the right trade for a
-one-command demo; reach for the API + `BotManager` path when you need durability.
+live progress stream — you get `🔍 Researching…` → final report (sent across
+several messages if it's long). That's the right trade for a one-command demo;
+reach for the API + `BotManager` path when you need durability.

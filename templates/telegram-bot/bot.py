@@ -62,6 +62,25 @@ def _build_router():
     return router
 
 
+def _split_for_telegram(text: str) -> list[str]:
+    """Split a report into Telegram-sized chunks, breaking on newlines where
+    possible so paragraphs aren't cut mid-sentence. Research reports routinely
+    exceed one message, so we send the whole thing across several rather than
+    truncate it."""
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > _MAX_TELEGRAM_MESSAGE:
+        window = remaining[:_MAX_TELEGRAM_MESSAGE]
+        cut = window.rfind("\n")
+        if cut <= 0:  # no newline to break on — hard split at the limit
+            cut = _MAX_TELEGRAM_MESSAGE
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
 async def _research_and_reply(query: str, placeholder) -> None:
     """Run the in-process pipeline and edit the placeholder with the report.
 
@@ -73,10 +92,16 @@ async def _research_and_reply(query: str, placeholder) -> None:
     try:
         result = await run_local_async(query, depth)
         report = result.get("final_report") or "(no report produced)"
-        await placeholder.edit_text(report[:_MAX_TELEGRAM_MESSAGE])
+        chunks = _split_for_telegram(report)
+        await placeholder.edit_text(chunks[0])
+        for chunk in chunks[1:]:  # long reports continue as follow-up messages
+            await placeholder.answer(chunk)
     except Exception:  # noqa: BLE001 — keep the bot alive for the next question
         log.exception("research failed")
-        await placeholder.edit_text("❌ Research failed while running. Please try again.")
+        try:
+            await placeholder.edit_text("❌ Research failed while running. Please try again.")
+        except Exception:  # noqa: BLE001 — even the error notice can fail; stay up
+            pass
 
 
 async def _main() -> None:
