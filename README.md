@@ -103,7 +103,7 @@ research_assistant/
 ├── bot/      # dynamic per-token Telegram bot lifecycle + aiogram handlers
 ├── cli/      # terminal client (httpx + rich); also an in-process `--local` runner
 ├── eval/     # offline golden-set harness + LLM-judge (faithfulness/coverage)
-└── scripts/  # CLI entrypoints (issue_api_key)
+└── scripts/  # CLI entrypoints (issue_api_key, smoke)
 ```
 
 </details>
@@ -131,8 +131,9 @@ cp .env.example .env
 # 4. API
 uvicorn research_assistant.api.app:app --reload
 
-# 5. Celery worker  (separate terminal; use --pool=solo on Windows)
+# 5. Celery worker  (separate terminal)
 celery -A research_assistant.tasks.celery_app worker --loglevel=info
+#   on Windows, add:  --pool=solo
 
 # 6. issue an API key — no signup; identity comes from the key
 python -m research_assistant.scripts.issue_api_key u1
@@ -190,6 +191,22 @@ research ask "compare Rust and Go for systems work" --local --depth deep
 
 `--depth quick | standard | deep` (default `standard`) scales one knob across the whole run:
 number of sub-questions, sources per sub-question, and Critic→Researcher revision rounds.
+
+### Telegram bot — run one with zero infra
+
+A standalone, single-tenant bot template lives in
+[`templates/telegram-bot/`](templates/telegram-bot/): drop a token in its `.env`, run one
+command, and it polls Telegram and runs the **full pipeline in-process** (the same `--local`
+path) — no Docker, API, Celery, or API key.
+
+```bash
+cp templates/telegram-bot/.env.example templates/telegram-bot/.env   # add bot token + LLM + Tavily keys
+python templates/telegram-bot/bot.py
+```
+
+That's the turnkey path. For the durable, multi-user path — many people attaching their own
+bots through the API — use `/bot/connect` (see [Quick start](#-quick-start)) and the
+`BotManager` in `bot/` instead.
 
 ## 🧪 Evaluation
 
