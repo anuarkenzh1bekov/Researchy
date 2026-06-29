@@ -31,6 +31,15 @@ as it happens.
 It's **backend only** — one backend, many frontends. A terminal CLI and an optional
 Telegram bot ship in the repo; both are *just API consumers*, importing no server internals.
 
+## 🎬 Demo
+
+The CLI streaming a full run end to end — Planner → Researchers → Critic → Synthesizer —
+in `--local` mode (no infra):
+
+![Researchy running locally](docs/demo.gif)
+
+> Recorded in `--local` mode with `research ask "compare Rust and Go for systems work" --local --depth quick`.
+
 ## ✨ Key features
 
 **1. Multi-agent pipeline.** Planner → parallel Researchers → Critic → Synthesizer, wired
@@ -222,7 +231,7 @@ Schema + module seams already accommodate these as one-module additions — see 
 comments in code; no schema migration required:
 
 - Session memory / semantic recall (`ResearchTask.embedding` pgvector column)
-- Custom user-defined agents (`LLMAgentConfig` table)
+- Custom user-defined agents (`LLMAgentConfig` schema sketch — flip `table=True` to enable)
 - Confidence scoring on findings
 - Threading depth profiles through the API / Celery path (currently `--local` only)
 
