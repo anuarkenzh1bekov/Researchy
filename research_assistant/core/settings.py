@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     groq_api_key: str | None = None
 
+    # --- telegram (standalone bot template; see templates/telegram-bot/) ---
+    telegram_bot_token: str | None = None
+
     # --- tools ---
     tavily_api_key: str | None = None
     arxiv_min_interval_seconds: float = 3.0

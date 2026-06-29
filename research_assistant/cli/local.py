@@ -46,12 +46,9 @@ async def _run(query: str, profile: DepthProfile) -> dict:
     return await graph.ainvoke({"query": query})
 
 
-def run_local(query: str, depth: str | None = None) -> dict:
-    """Run the pipeline in-process and return a task-shaped dict that
-    render.render_report / _save_report already understand."""
-    profile = get_profile(depth)
-    print(f"running locally · depth={profile.name}")
-    final = asyncio.run(_run(query, profile))
+def _shape(query: str, final: dict) -> dict:
+    """Project the graph's final state into the task-shaped dict that
+    render.render_report / _save_report (and the Telegram template) understand."""
     usage = final.get("usage") or {}
     return {
         "status": "done",
@@ -61,3 +58,18 @@ def run_local(query: str, depth: str | None = None) -> dict:
         "sub_questions": final.get("sub_questions", []),
         "total_tokens": usage.get("total_tokens", 0),
     }
+
+
+def run_local(query: str, depth: str | None = None) -> dict:
+    """Run the pipeline in-process and return a task-shaped dict that
+    render.render_report / _save_report already understand."""
+    profile = get_profile(depth)
+    print(f"running locally · depth={profile.name}")
+    return _shape(query, asyncio.run(_run(query, profile)))
+
+
+async def run_local_async(query: str, depth: str | None = None) -> dict:
+    """Async sibling of run_local for callers already inside an event loop
+    (e.g. the standalone Telegram bot's aiogram handlers, which can't call
+    asyncio.run). Same in-process pipeline, same task-shaped result."""
+    return _shape(query, await _run(query, get_profile(depth)))
