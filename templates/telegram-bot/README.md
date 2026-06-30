@@ -20,8 +20,9 @@ python templates/telegram-bot/bot.py
 ```
 
 That's it. Message the bot in Telegram — `/start` for a greeting, then send any
-question. It replies `🔍 Researching…`, runs the pipeline, and edits that message
-with the finished, sourced report.
+question. It replies `🔍 Researching…`, runs the pipeline, and sends back the
+finished, sourced report as a `.md` file (same layout as the CLI's
+`exports/<slug>.md`).
 
 ## Config
 
@@ -37,6 +38,6 @@ All config lives in this folder's `.env` (see `.env.example`):
 ## Limits (by design)
 
 Because it runs `--local`, there's no persistence (history isn't saved) and no
-live progress stream — you get `🔍 Researching…` → final report (sent across
-several messages if it's long). That's the right trade for a one-command demo;
-reach for the API + `BotManager` path when you need durability.
+live progress stream — you get `🔍 Researching…` → the report as a `.md`
+attachment. That's the right trade for a one-command demo; reach for the API +
+`BotManager` path when you need durability.

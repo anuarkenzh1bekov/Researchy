@@ -2,6 +2,32 @@
 
 Ideas not yet implemented. Newest on top.
 
+## docs/ARCHITECTURE.md — a map for contributors (and Claude Code)
+
+**Problem:** the README explains *what* the system does and *how to run* it, but a new
+contributor (human or an AI agent like Claude Code) who wants to extend it still has to
+reverse-engineer the layout, the module boundaries, and the `# EXTENSION:` seams from the
+source. The architecture knowledge is currently spread across the README, module docstrings,
+and inline comments.
+
+**Idea:** generate a standalone `docs/ARCHITECTURE.md` aimed at *modifying* the code, not
+just using it:
+- The data flow end to end: request → planner → researchers (fan-out via `Send`) → critic
+  loop → synthesizer → persisted report, and where each lives.
+- The module map with each module's one job and its dependencies (the dependency direction
+  rule: `agents/` never imports `api/`; `tasks/` is the only agents↔storage wiring; clients
+  import no server internals).
+- The extension points — every `# EXTENSION:` seam, what it's for, and the one-module change
+  that activates it (per-agent LLM config, embeddings/semantic recall, custom tools/agents,
+  depth profiles through the API path).
+- The two infra modes (`--local` in-process vs full Celery/Postgres/Redis) and why both exist.
+
+Keep it generated/refreshed so it doesn't drift; this also shrinks the README (move the deep
+architecture out, leave the overview).
+
+**Acceptance:** someone (or Claude Code) can read `ARCHITECTURE.md` alone and know where to
+add a feature and which seam to touch, without grepping the whole tree first.
+
 ## [FIXED] Bug: CLI crashes on legacy Windows console (cp1252)
 
 **Problem:** in the classic cmd.exe console (codepage cp1252), `rich` rendered the

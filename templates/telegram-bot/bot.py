@@ -27,8 +27,6 @@ load_dotenv(Path(__file__).with_name(".env"))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s")
 log = logging.getLogger("researchy.bot")
 
-_MAX_TELEGRAM_MESSAGE = 4096  # Telegram's hard per-message limit
-
 # Strong refs to in-flight research tasks so the loop doesn't GC them mid-run
 # (asyncio holds only weak refs to bare create_task results).
 _RENDER_TASKS: set[asyncio.Task] = set()
@@ -62,40 +60,58 @@ def _build_router():
     return router
 
 
-def _split_for_telegram(text: str) -> list[str]:
-    """Split a report into Telegram-sized chunks, breaking on newlines where
-    possible so paragraphs aren't cut mid-sentence. Research reports routinely
-    exceed one message, so we send the whole thing across several rather than
-    truncate it."""
-    chunks: list[str] = []
-    remaining = text
-    while len(remaining) > _MAX_TELEGRAM_MESSAGE:
-        window = remaining[:_MAX_TELEGRAM_MESSAGE]
-        cut = window.rfind("\n")
-        if cut <= 0:  # no newline to break on — hard split at the limit
-            cut = _MAX_TELEGRAM_MESSAGE
-        chunks.append(remaining[:cut])
-        remaining = remaining[cut:].lstrip("\n")
-    if remaining:
-        chunks.append(remaining)
-    return chunks
+def _slugify(text: str, maxlen: int = 60) -> str:
+    """Filesystem-safe stem from the query: 'Who is Ronaldo?' -> 'who-is-ronaldo'.
+    Used to name the .md attachment after the question."""
+    import re
+
+    s = re.sub(r"[^\w\s-]", "", text.lower())
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")
+    return s[:maxlen].strip("-") or "report"
+
+
+def _build_report_md(result: dict) -> str:
+    """Render the task-shaped result into a Markdown document — same layout as the
+    CLI's exports/<slug>.md, so the bot's attachment matches the CLI's file."""
+    from datetime import datetime
+
+    query = result.get("query", "")
+    lines = [
+        f"# Research report — {query}",
+        "",
+        f"*{datetime.now():%Y-%m-%d %H:%M}*",
+        "",
+        result.get("final_report", "") or "(no report produced)",
+    ]
+    sources = result.get("sources") or []
+    if sources:
+        lines += ["", "## Sources", ""]
+        for i, s in enumerate(sources, 1):
+            lines.append(f"{i}. [{s.get('title', '')}]({s.get('url', '')})")
+    total = result.get("total_tokens") or 0
+    if total:
+        lines += ["", f"*tokens: {total:,}*"]
+    return "\n".join(lines) + "\n"
 
 
 async def _research_and_reply(query: str, placeholder) -> None:
-    """Run the in-process pipeline and edit the placeholder with the report.
+    """Run the in-process pipeline and send the report back as a .md document.
 
     Isolated so a failure surfaces as a friendly message instead of taking the
     bot down for the next question."""
+    from aiogram.types import BufferedInputFile
+
     from research_assistant.cli.local import run_local_async
 
     depth = os.getenv("RESEARCH_DEPTH") or None  # quick | standard | deep
     try:
         result = await run_local_async(query, depth)
-        report = result.get("final_report") or "(no report produced)"
-        chunks = _split_for_telegram(report)
-        await placeholder.edit_text(chunks[0])
-        for chunk in chunks[1:]:  # long reports continue as follow-up messages
-            await placeholder.answer(chunk)
+        document = BufferedInputFile(
+            _build_report_md(result).encode("utf-8"),
+            filename=f"{_slugify(query)}.md",
+        )
+        await placeholder.edit_text("✅ Done — report attached below.")
+        await placeholder.answer_document(document, caption=f"📄 {query[:1000]}")
     except Exception:  # noqa: BLE001 — keep the bot alive for the next question
         log.exception("research failed")
         try:
