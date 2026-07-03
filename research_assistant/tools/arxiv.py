@@ -18,7 +18,10 @@ from research_assistant.tools.base import ToolResult, is_transient
 
 log = get_logger(__name__)
 
-_ARXIV_API = "http://export.arxiv.org/api/query"
+_ARXIV_API = "https://export.arxiv.org/api/query"
+# arXiv now returns 503 to clients without a descriptive User-Agent (per its
+# API usage policy), so send one instead of httpx's default.
+_HEADERS = {"User-Agent": "Researchy/0.1 (+https://github.com/; research assistant)"}
 
 # process-wide gate. ponytail: single-process only. Across Celery workers, swap
 # for a Redis token-bucket — ArxivTool.search() is the only caller to change.
@@ -68,7 +71,7 @@ class ArxivTool:
         import httpx  # lazy
 
         await _throttle(self._min_interval)
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=30, headers=_HEADERS) as client:
             resp = await client.get(
                 _ARXIV_API,
                 params={
