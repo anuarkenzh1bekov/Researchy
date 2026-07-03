@@ -19,6 +19,11 @@ from research_assistant.tools.base import ResearchTool, ToolResult
 # (tool_name, query, max_results) -> (stored_at_monotonic, results)
 _store: dict[tuple[str, str, int], tuple[float, list[ToolResult]]] = {}
 
+# Hard cap on distinct cached queries per worker. Without it the store only ever
+# grows: TTL is checked on read, so expired keys for queries never asked again
+# linger forever. On overflow we evict the oldest entries (insertion order).
+_MAX_ENTRIES = 512
+
 
 class CachingTool:
     name: str
@@ -36,7 +41,17 @@ class CachingTool:
             return list(hit[1])  # copy so callers can't mutate the cached list
         results = await self._inner.search(query, max_results=max_results)
         _store[key] = (now, list(results))
+        _evict(now, self._ttl)
         return list(results)
+
+
+def _evict(now: float, ttl: float) -> None:
+    """Drop expired entries; if still over the cap, evict oldest-inserted first.
+    dict preserves insertion order, so the first keys are the oldest writes."""
+    for k in [k for k, (ts, _) in _store.items() if now - ts >= ttl]:
+        del _store[k]
+    while len(_store) > _MAX_ENTRIES:
+        del _store[next(iter(_store))]
 
 
 def clear_cache() -> None:

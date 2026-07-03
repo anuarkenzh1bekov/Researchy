@@ -85,10 +85,12 @@ def _critic_messages(query: str, findings: list[Finding]) -> list[Message]:
             content=(
                 "You are the Critic. Review the findings together for gaps, "
                 "contradictions, or unsupported claims. Reply with ONLY JSON: "
-                '{"approved": bool, "gaps": ["sub-question needing more work", ...]}. '
-                "Each gap MUST be a self-contained question that names the subject "
-                "of the goal (e.g. 'Ronaldo's philanthropy', not just 'philanthropy') "
-                "so it stays on-topic when researched. "
+                '{"approved": bool, "gaps": ["<exact sub-question to redo>", ...]}. '
+                "Each gap MUST be copied VERBATIM from one of the '### ...' "
+                "sub-question headings below — pick the ones whose findings are "
+                "weakest and need re-researching. The exact text is required so the "
+                "re-run REPLACES that finding instead of adding a duplicate; a "
+                "paraphrase silently leaves the weak answer in the report. "
                 "Approve when the findings adequately answer the goal."
             ),
         ),
@@ -325,13 +327,28 @@ def fan_out_researchers(state: ResearchState) -> list[Send]:
     ]
 
 
+def _snap_to_subquestion(gap: str, sub_questions: list[str]) -> str:
+    """Snap a Critic gap back to the ORIGINAL sub-question text when it's the same
+    question in different clothes (case/whitespace/trailing punctuation). The
+    findings channel dedupes by exact sub_question (state.merge_findings), so a
+    paraphrased gap would ADD a second finding instead of REPLACING the weak one.
+    Exact-after-normalize only — a genuinely new angle falls through unchanged."""
+    norm = lambda s: re.sub(r"\s+", " ", s.lower().strip()).rstrip("?.!")  # noqa: E731
+    ngap = norm(gap)
+    for sq in sub_questions:
+        if norm(sq) == ngap:
+            return sq
+    return gap
+
+
 def route_after_critic(state: ResearchState, *, max_revisions: int) -> str | list[Send]:
     """Critic's verdict -> next hop. Approved or out of revisions -> synthesize.
     Otherwise re-research ONLY the flagged gap sub-questions (fan-out again)."""
     if state.get("approved") or state.get("revision", 0) >= max_revisions:
         return "synthesizer"
     query = state["query"]
+    subs = state.get("sub_questions", [])
     return [
-        Send("researcher", {"query": query, "sub_question": gap})
+        Send("researcher", {"query": query, "sub_question": _snap_to_subquestion(gap, subs)})
         for gap in state.get("gaps", [])
     ]
