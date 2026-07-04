@@ -1,13 +1,17 @@
-"""Write a finished research task to a file: Markdown (default), DOCX, or PDF.
+"""Render a finished research task to Markdown (default), DOCX, or PDF.
+
+Shared by every frontend: the CLI writes the bytes to `exports/<slug>.<ext>`,
+the Telegram bot sends them as an attachment — one renderer, many sinks.
 
 The report body from the pipeline is Markdown, so DOCX/PDF are rendered from a
 deliberately small Markdown subset — headings (`#`/`##`/`###`), paragraphs and
 bullet lists — which is all the agents actually emit. That keeps us off a heavy
 document toolchain (no pandoc/LaTeX/GTK): `python-docx` and `fpdf2` are pure-pip
-optional extras, and a missing one becomes a one-line install hint, not a
-traceback.
+optional extras (the `export` extra), and a missing one becomes a one-line
+install hint, not a traceback.
 
-The file name follows the query slug, so each question lands in its own file.
+`task` is a plain dict with keys: status, id, query, final_report, sources,
+total_tokens — so this module stays free of any storage/ORM dependency.
 """
 
 from __future__ import annotations
@@ -15,6 +19,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
 FORMATS = ("md", "docx", "pdf")
@@ -27,27 +32,32 @@ def slugify(text: str, maxlen: int = 60) -> str:
     return s[:maxlen].strip("-") or "report"
 
 
+def render(task: dict, fmt: str = "md") -> bytes:
+    """The report in `fmt` as bytes (md is UTF-8 text; docx/pdf are binary).
+
+    Raises ValueError for an unknown format, and ModuleNotFoundError/RuntimeError
+    (with a friendly message) when a format's optional dependency or a required
+    Unicode font is missing. Does not check task status — callers gate on that."""
+    if fmt == "md":
+        return _markdown(task).encode("utf-8")
+    if fmt == "docx":
+        return _docx_bytes(task)
+    if fmt == "pdf":
+        return _pdf_bytes(task)
+    raise ValueError(f"unknown format {fmt!r} — choose from {', '.join(FORMATS)}")
+
+
 def save_report(task: dict, fmt: str = "md") -> Path | None:
     """Write the report in `fmt` to exports/<slug>.<ext>; return the path or None.
 
-    Returns None for an unfinished/empty task. Raises ValueError for an unknown
-    format, and ModuleNotFoundError/RuntimeError (with a friendly message) when a
-    format's optional dependency or a required font is missing."""
+    Returns None for an unfinished/empty task. Propagates render()'s errors."""
     if task.get("status") != "done" or not task.get("final_report"):
         return None
-    if fmt not in FORMATS:
-        raise ValueError(f"unknown format {fmt!r} — choose from {', '.join(FORMATS)}")
-
+    data = render(task, fmt)  # validates fmt / deps before we touch the disk
     exports = Path("exports")
     exports.mkdir(exist_ok=True)
     path = exports / f"{slugify(task.get('query', 'report'))}.{fmt}"
-
-    if fmt == "md":
-        path.write_text(_markdown(task), encoding="utf-8")
-    elif fmt == "docx":
-        _write_docx(task, path)
-    else:  # pdf
-        _write_pdf(task, path)
+    path.write_bytes(data)
     return path
 
 
@@ -150,7 +160,7 @@ def _missing(fmt: str, pkg: str) -> ModuleNotFoundError:
 # --- DOCX --------------------------------------------------------------------
 
 
-def _write_docx(task: dict, path: Path) -> None:
+def _docx_bytes(task: dict) -> bytes:
     try:
         from docx import Document
         from docx.shared import Pt
@@ -171,7 +181,9 @@ def _write_docx(task: dict, path: Path) -> None:
             run.font.size = Pt(9)
         else:  # p
             doc.add_paragraph(text)
-    doc.save(str(path))
+    buf = BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
 
 
 # --- PDF ---------------------------------------------------------------------
@@ -181,7 +193,7 @@ _PDF_SIZES = {"title": 18, "h1": 15, "h2": 13, "h3": 12, "meta": 9}
 _PDF_BODY = 11
 
 
-def _write_pdf(task: dict, path: Path) -> None:
+def _pdf_bytes(task: dict) -> bytes:
     try:
         from fpdf import FPDF
     except ModuleNotFoundError as e:
@@ -194,7 +206,7 @@ def _write_pdf(task: dict, path: Path) -> None:
     if font is None and any(ord(c) > 0xFF for _, t in blocks for c in t):
         raise RuntimeError(
             "PDF export needs a Unicode TTF font for this text and none was found "
-            "on this system — export with --format docx or md instead."
+            "on this system — use the docx or md format instead."
         )
 
     pdf = FPDF()
@@ -211,7 +223,7 @@ def _write_pdf(task: dict, path: Path) -> None:
         pdf.set_font(family, size=size)
         pdf.multi_cell(0, size * 0.55, ("•  " + text) if kind == "li" else text)
         pdf.ln(2)
-    pdf.output(str(path))
+    return bytes(pdf.output())
 
 
 def _unicode_font() -> str | None:

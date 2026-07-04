@@ -13,9 +13,9 @@ aiogram is imported lazily inside build_router so importing this module is cheap
 from __future__ import annotations
 
 import asyncio
-import re
 import uuid
 
+from research_assistant import reporting
 from research_assistant.core.logging import get_logger
 
 log = get_logger(__name__)
@@ -25,36 +25,33 @@ log = get_logger(__name__)
 _RENDER_TASKS: set[asyncio.Task] = set()
 
 
-def _slugify(text: str, maxlen: int = 60) -> str:
-    """Filesystem-safe stem from the query: 'Who is Ronaldo?' -> 'who-is-ronaldo'.
-    Names the .md attachment after the question (same as the CLI/template)."""
-    s = re.sub(r"[^\w\s-]", "", text.lower())
-    s = re.sub(r"[\s_-]+", "-", s).strip("-")
-    return s[:maxlen].strip("-") or "report"
+def _task_dict(task) -> dict:
+    """Adapt a ResearchTask ORM row to the plain dict reporting.render expects,
+    so the bot shares the CLI's one report renderer instead of duplicating it."""
+    return {
+        "status": "done",
+        "id": str(task.id),
+        "query": task.query,
+        "final_report": task.final_report or "",
+        "sources": task.sources or [],
+        "total_tokens": task.total_tokens or 0,
+    }
 
 
-def _build_report_md(task) -> str:
-    """Render a finished ResearchTask into a Markdown document — same layout as
-    the CLI's exports/<slug>.md and the standalone template's attachment, so a
-    Telegram report never gets silently truncated at Telegram's 4096-char limit."""
-    from datetime import datetime
+def _format_keyboard(task_id):
+    """Inline buttons offering the report in the other formats. The task id rides
+    in callback_data so the tap handler can re-fetch and re-render on demand
+    (stateless — nothing about the report is held in memory between messages)."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    lines = [
-        f"# Research report — {task.query}",
-        "",
-        f"*{datetime.now():%Y-%m-%d %H:%M}*",
-        "",
-        (task.final_report or "") or "(no report produced)",
-    ]
-    sources = task.sources or []
-    if sources:
-        lines += ["", "## Sources", ""]
-        for i, s in enumerate(sources, 1):
-            lines.append(f"{i}. [{s.get('title', '')}]({s.get('url', '')})")
-    total = task.total_tokens or 0
-    if total:
-        lines += ["", f"*tokens: {total:,}*"]
-    return "\n".join(lines) + "\n"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📝 DOCX", callback_data=f"fmt:docx:{task_id}"),
+                InlineKeyboardButton(text="📕 PDF", callback_data=f"fmt:pdf:{task_id}"),
+            ]
+        ]
+    )
 
 
 def build_router():
@@ -97,6 +94,40 @@ def build_router():
         _RENDER_TASKS.add(render)
         render.add_done_callback(_RENDER_TASKS.discard)
 
+    @router.callback_query(F.data.startswith("fmt:"))
+    async def on_format(callback) -> None:
+        """A [DOCX]/[PDF] button tap: re-fetch the task and send that format.
+
+        Renders on demand from the stored report — no state kept between the
+        original delivery and the tap. A missing optional dep (python-docx /
+        fpdf2) or Unicode font surfaces as a toast, never a crashed handler."""
+        from aiogram.types import BufferedInputFile
+
+        from research_assistant.storage.db import get_sessionmaker
+        from research_assistant.storage.repository import ResearchTaskRepository
+
+        try:
+            _, fmt, tid = (callback.data or "").split(":", 2)
+            task_id = uuid.UUID(tid)
+        except ValueError:
+            await callback.answer()
+            return
+
+        async with get_sessionmaker()() as session:
+            task = await ResearchTaskRepository(session).get(task_id)
+        if task is None or not task.final_report:
+            await callback.answer("This report is no longer available.", show_alert=True)
+            return
+        try:
+            data = reporting.render(_task_dict(task), fmt)
+        except (ModuleNotFoundError, RuntimeError, ValueError) as e:
+            await callback.answer(str(e)[:200], show_alert=True)
+            return
+
+        document = BufferedInputFile(data, filename=f"{reporting.slugify(task.query)}.{fmt}")
+        await callback.message.answer_document(document, caption=f"📄 {fmt.upper()}")
+        await callback.answer()
+
     return router
 
 
@@ -130,12 +161,17 @@ async def _await_and_render(task_id: uuid.UUID, placeholder) -> None:
                 # Send the full report as a .md file, not a truncated message:
                 # Telegram caps a text message at 4096 chars, which silently cut
                 # the tail off any real report. Attachment preserves it whole.
+                # Inline buttons offer the same report as DOCX / PDF on demand.
                 document = BufferedInputFile(
-                    _build_report_md(task).encode("utf-8"),
-                    filename=f"{_slugify(task.query)}.md",
+                    reporting.render(_task_dict(task), "md"),
+                    filename=f"{reporting.slugify(task.query)}.md",
                 )
                 await placeholder.edit_text("✅ Done — report attached below.")
-                await placeholder.answer_document(document, caption=f"📄 {task.query[:1000]}")
+                await placeholder.answer_document(
+                    document,
+                    caption=f"📄 {task.query[:1000]}",
+                    reply_markup=_format_keyboard(task.id),
+                )
                 return
     except Exception as e:  # noqa: BLE001 — keep this user's bot alive
         log.warning("bot_render_failed", task_id=str(task_id), error=str(e))

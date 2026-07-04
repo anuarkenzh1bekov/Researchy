@@ -211,6 +211,11 @@ That's the turnkey path. For the durable, multi-user path - many people attachin
 bots through the API - use `/bot/connect` (see [Quick start](#-quick-start)) and the
 `BotManager` in `bot/` instead.
 
+The API-connected bot sends the finished report as a `.md` attachment with **inline
+[DOCX] / [PDF] buttons** - a tap re-renders that format on demand (needs the `export` extra
+on the bot host). The same one renderer (`research_assistant/reporting.py`) backs the CLI's
+`--format` flag and the bot buttons.
+
 ## 🧪 Evaluation
 
 An offline harness runs the pipeline over a fixed set of golden questions and scores each

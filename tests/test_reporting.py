@@ -8,7 +8,7 @@ import importlib.util
 
 import pytest
 
-from research_assistant.cli import export
+from research_assistant import reporting as export
 
 # A finished task with a Markdown body exercising headings, bullets, and inline
 # markup — plus a Cyrillic word to keep the PDF Unicode path honest.
@@ -58,6 +58,17 @@ def test_inline_flattens_links_emphasis_and_code():
 
 
 # --- format smoke tests ------------------------------------------------------
+
+
+def test_render_md_returns_utf8_bytes():
+    data = export.render(TASK, "md")
+    assert isinstance(data, bytes)
+    assert "# Research report — What is RAG?" in data.decode("utf-8")
+
+
+def test_render_rejects_unknown_format():
+    with pytest.raises(ValueError):
+        export.render(TASK, "rtf")
 
 
 def test_save_report_writes_markdown(tmp_path, monkeypatch):

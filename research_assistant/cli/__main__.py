@@ -14,7 +14,8 @@ import time
 
 import httpx
 
-from research_assistant.cli import config, export, render
+from research_assistant import reporting
+from research_assistant.cli import config, render
 from research_assistant.cli.client import APIError, ResearchClient
 
 
@@ -43,7 +44,7 @@ def _emit_saved(task: dict, fmt: str) -> None:
     """Save the report in `fmt` and print where it landed, turning a missing
     optional dependency / font into a one-line message instead of a traceback."""
     try:
-        saved = export.save_report(task, fmt)
+        saved = reporting.save_report(task, fmt)
     except (ModuleNotFoundError, RuntimeError, ValueError) as e:
         print(f"✗ {e}")
         return
@@ -192,7 +193,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ask.add_argument(
         "--format",
-        choices=export.FORMATS,
+        choices=reporting.FORMATS,
         default="md",
         help="report file format (default: md; docx/pdf need the 'export' extra)",
     )
