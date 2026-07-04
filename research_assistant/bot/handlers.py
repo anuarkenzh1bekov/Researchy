@@ -61,8 +61,20 @@ def _depth_keyboard(task_id):
 
 
 # The output formats, in the order shown as buttons. Names must match
-# reporting.FORMATS so reporting.render accepts them verbatim.
-_FORMATS = (("📄 Markdown", "md"), ("📝 DOCX", "docx"), ("📕 PDF", "pdf"))
+# reporting.FORMATS so reporting.render accepts them verbatim. "paper" is the
+# tectonic-compiled APA PDF; "tex" the raw LaTeX source (Overleaf-ready).
+_FORMATS = (
+    ("📄 Markdown", "md"),
+    ("📝 DOCX", "docx"),
+    ("📕 PDF", "pdf"),
+    ("🎓 APA paper", "paper"),
+    ("📚 LaTeX", "tex"),
+)
+
+
+def _rows(buttons, per_row: int = 3):
+    """Chunk buttons into keyboard rows (Telegram squeezes >3 labels per row)."""
+    return [buttons[i : i + per_row] for i in range(0, len(buttons), per_row)]
 
 
 def _run_keyboard(depth, task_id):
@@ -71,14 +83,11 @@ def _run_keyboard(depth, task_id):
     and later render in that format — see on_run."""
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text=label, callback_data=f"run:{depth}:{fmt}:{task_id}")
-                for label, fmt in _FORMATS
-            ]
-        ]
-    )
+    buttons = [
+        InlineKeyboardButton(text=label, callback_data=f"run:{depth}:{fmt}:{task_id}")
+        for label, fmt in _FORMATS
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=_rows(buttons))
 
 
 def _format_keyboard(task_id, exclude=None):
@@ -87,12 +96,12 @@ def _format_keyboard(task_id, exclude=None):
     can re-fetch and re-render on demand (stateless — nothing held in memory)."""
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-    row = [
+    buttons = [
         InlineKeyboardButton(text=label, callback_data=f"fmt:{fmt}:{task_id}")
         for label, fmt in _FORMATS
         if fmt != exclude
     ]
-    return InlineKeyboardMarkup(inline_keyboard=[row])
+    return InlineKeyboardMarkup(inline_keyboard=_rows(buttons))
 
 
 def build_router():
@@ -235,7 +244,9 @@ def build_router():
             await callback.answer(str(e)[:200], show_alert=True)
             return
 
-        document = BufferedInputFile(data, filename=f"{reporting.slugify(task.query)}.{fmt}")
+        document = BufferedInputFile(
+            data, filename=f"{reporting.slugify(task.query)}.{reporting.ext_for(fmt)}"
+        )
         await callback.message.answer_document(document, caption=f"📄 {fmt.upper()}")
         await callback.answer()
 
@@ -281,9 +292,13 @@ async def _await_and_render(task_id: uuid.UUID, placeholder, fmt: str = "md") ->
                 except (ModuleNotFoundError, RuntimeError, ValueError) as e:
                     delivered = "md"
                     data = reporting.render(_task_dict(task), "md")
-                    note = f"\n\n⚠️ Couldn't produce {fmt.upper()} ({str(e)[:150]}) — sent Markdown instead."
+                    note = (
+                        f"\n\n⚠️ Couldn't produce {fmt.upper()} ({str(e)[:150]}) "
+                        "— sent Markdown instead."
+                    )
                 document = BufferedInputFile(
-                    data, filename=f"{reporting.slugify(task.query)}.{delivered}"
+                    data,
+                    filename=f"{reporting.slugify(task.query)}.{reporting.ext_for(delivered)}",
                 )
                 await placeholder.edit_text(f"✅ Done — {delivered.upper()} report attached below.")
                 # Buttons offer the report in the remaining formats on demand.

@@ -52,7 +52,14 @@ async def test_pipeline_runs_planner_researchers_critic_synthesizer():
     assert all(f["answer"] == "Researched answer with evidence." for f in result["findings"])
     assert result["final_report"] == "FINAL REPORT combining all findings."
     assert result["sources"] == [
-        {"title": "Paper", "url": "http://x/1", "snippet": "snip", "source_type": "web"}
+        {
+            "title": "Paper",
+            "url": "http://x/1",
+            "snippet": "snip",
+            "source_type": "web",
+            "authors": [],
+            "year": None,
+        }
     ]  # deduped by url across both researchers
     # token usage summed across all 5 LLM calls (planner + 2 researchers + critic
     # + synthesizer), each fake call billing 10 in / 5 out / 15 total.

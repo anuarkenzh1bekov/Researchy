@@ -175,7 +175,11 @@ research bot connect <bot_token>   # attach a Telegram bot via the same API
 progress live, then print the report as Markdown. Each run is also saved to
 `exports/<query-slug>.md`; pass `--format docx` or `--format pdf` to save that instead
 (`pip install "research-assistant[export]"` for the pure-pip `python-docx` / `fpdf2`
-backends). In the REPL a follow-up line
+backends). For an academic-style write-up, `--format tex` emits a self-contained LaTeX
+paper (title page, abstract, TOC, APA author-year citations via natbib/apalike, embedded
+BibTeX — drop it straight into Overleaf), and `--format paper` compiles that to PDF with
+the [tectonic](https://tectonic-typesetting.github.io) engine if it's on your PATH.
+In the REPL a follow-up line
 (`and his trophies?`, `why?`) is folded into the previous question so the pipeline keeps
 the subject; `new` clears the running topic. Config can also come from `RESEARCHY_API_URL` /
 `RESEARCHY_API_KEY` (CI-friendly).

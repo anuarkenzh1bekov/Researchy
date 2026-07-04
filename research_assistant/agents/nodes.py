@@ -162,7 +162,14 @@ async def _gather_sources(
 
 
 def _as_source(r: ToolResult) -> dict:
-    return {"title": r.title, "url": r.url, "snippet": r.snippet, "source_type": r.source_type}
+    return {
+        "title": r.title,
+        "url": r.url,
+        "snippet": r.snippet,
+        "source_type": r.source_type,
+        "authors": r.authors,
+        "year": r.year,
+    }
 
 
 _CITE = re.compile(r"\[(\d+)\]")

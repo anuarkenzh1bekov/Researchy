@@ -4,7 +4,7 @@ tools (Tavily/Arxiv/...) are injected, never imported by agent code.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 
@@ -14,6 +14,10 @@ class ToolResult:
     url: str
     snippet: str
     source_type: str  # "web" | "academic"
+    # APA citation metadata — academic tools fill these; web search rarely can,
+    # so renderers must handle the empty/None fallback (title-as-author, n.d.).
+    authors: list[str] = field(default_factory=list)
+    year: int | None = None
 
 
 @runtime_checkable

@@ -44,12 +44,16 @@ def _parse_feed(text: str) -> list[ToolResult]:
     feed = feedparser.parse(text)
     out: list[ToolResult] = []
     for e in feed.entries:
+        published = getattr(e, "published", "")  # ISO "2017-06-12T17:57:34Z"
+        year = int(published[:4]) if published[:4].isdigit() else None
         out.append(
             ToolResult(
                 title=getattr(e, "title", "").strip(),
                 url=getattr(e, "link", ""),
                 snippet=getattr(e, "summary", "").strip()[:1000],
                 source_type="academic",
+                authors=[a["name"] for a in getattr(e, "authors", []) if a.get("name")],
+                year=year,
             )
         )
     return out

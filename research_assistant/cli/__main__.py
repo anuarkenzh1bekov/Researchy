@@ -195,7 +195,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--format",
         choices=reporting.FORMATS,
         default="md",
-        help="report file format (default: md; docx/pdf need the 'export' extra)",
+        help=(
+            "report file format (default: md; docx/pdf need the 'export' extra; "
+            "tex = APA LaTeX source, paper = PDF via the tectonic engine)"
+        ),
     )
 
     sub.add_parser("history", help="list your past research tasks")

@@ -22,7 +22,16 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
-FORMATS = ("md", "docx", "pdf")
+FORMATS = ("md", "docx", "pdf", "tex", "paper")
+
+# file extension per format (default: the format name itself). "paper" is a
+# tectonic-compiled LaTeX document — the artifact is a PDF.
+_EXT = {"paper": "pdf"}
+
+
+def ext_for(fmt: str) -> str:
+    """Filename extension for a format ('paper' renders to a .pdf)."""
+    return _EXT.get(fmt, fmt)
 
 
 def slugify(text: str, maxlen: int = 60) -> str:
@@ -44,6 +53,11 @@ def render(task: dict, fmt: str = "md") -> bytes:
         return _docx_bytes(task)
     if fmt == "pdf":
         return _pdf_bytes(task)
+    if fmt in ("tex", "paper"):
+        # lazy: LaTeX/APA export lives in its own module (latex.py)
+        from research_assistant import latex
+
+        return latex.to_tex(task).encode("utf-8") if fmt == "tex" else latex.to_pdf(task)
     raise ValueError(f"unknown format {fmt!r} — choose from {', '.join(FORMATS)}")
 
 
@@ -56,7 +70,7 @@ def save_report(task: dict, fmt: str = "md") -> Path | None:
     data = render(task, fmt)  # validates fmt / deps before we touch the disk
     exports = Path("exports")
     exports.mkdir(exist_ok=True)
-    path = exports / f"{slugify(task.get('query', 'report'))}.{fmt}"
+    path = exports / f"{slugify(task.get('query', 'report'))}.{ext_for(fmt)}"
     path.write_bytes(data)
     return path
 
