@@ -64,7 +64,9 @@ def _researcher_messages(query: str, sub_question: str, results: list[ToolResult
                 "- Cite every claim inline by its [n] index.\n"
                 "- If the sources are thin, conflicting, or don't answer it, say so "
                 "plainly instead of guessing or filling the gap.\n"
-                "- Be concise: a few tight paragraphs, no preamble."
+                "- Be thorough and detailed: cover every relevant point the sources "
+                "support, with specifics — names, numbers, dates, context — and "
+                "explain nuances and disagreements rather than glossing over them."
             ),
         ),
         Message(
@@ -113,6 +115,10 @@ def _synthesizer_messages(
                 "Markdown report:\n"
                 "- Open with a 2-4 sentence executive summary that answers the goal.\n"
                 "- Then one '## ' section per sub-question, in the order given.\n"
+                "- Be thorough: develop each section in depth, several substantial "
+                "paragraphs, covering every relevant detail the findings support "
+                "(specifics, numbers, context, caveats) rather than summarising "
+                "briefly. Do not omit supporting detail for the sake of brevity.\n"
                 "- Use only facts present in the findings; invent nothing.\n"
                 "- Keep the [n] citations exactly as they appear in the findings — "
                 "they index the numbered Sources list and must stay consistent.\n"

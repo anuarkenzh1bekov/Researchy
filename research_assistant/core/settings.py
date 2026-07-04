@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     llm_api_base: str | None = None
     llm_api_key: str | None = None
     llm_temperature: float = 0.3
-    llm_max_tokens: int = 2048
+    llm_max_tokens: int = 4096
 
     # provider keys — LiteLLM also picks these up from env by its own convention.
     openai_api_key: str | None = None
