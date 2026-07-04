@@ -38,20 +38,61 @@ def _task_dict(task) -> dict:
     }
 
 
-def _format_keyboard(task_id):
-    """Inline buttons offering the report in the other formats. The task id rides
-    in callback_data so the tap handler can re-fetch and re-render on demand
-    (stateless — nothing about the report is held in memory between messages)."""
+# The three depth profiles, in the order shown as buttons. Kept here (not read
+# from agents/profiles) so the bot layer carries no agents/ import; the names
+# still resolve to a real profile in the worker via get_profile.
+_DEPTHS = (("⚡ Quick", "quick"), ("🔍 Standard", "standard"), ("🧠 Deep", "deep"))
+
+
+def _depth_keyboard(task_id):
+    """Inline buttons letting the user pick the research depth for THIS question.
+    The depth name + task id ride in callback_data so the tap handler can enqueue
+    the run with the chosen profile — nothing is held in memory between messages."""
     from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="📝 DOCX", callback_data=f"fmt:docx:{task_id}"),
-                InlineKeyboardButton(text="📕 PDF", callback_data=f"fmt:pdf:{task_id}"),
+                InlineKeyboardButton(text=label, callback_data=f"depth:{name}:{task_id}")
+                for label, name in _DEPTHS
             ]
         ]
     )
+
+
+# The output formats, in the order shown as buttons. Names must match
+# reporting.FORMATS so reporting.render accepts them verbatim.
+_FORMATS = (("📄 Markdown", "md"), ("📝 DOCX", "docx"), ("📕 PDF", "pdf"))
+
+
+def _run_keyboard(depth, task_id):
+    """Second-step buttons: pick the output FORMAT for a chosen depth. The depth,
+    format and task id all ride in callback_data so the tap can enqueue the run
+    and later render in that format — see on_run."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=label, callback_data=f"run:{depth}:{fmt}:{task_id}")
+                for label, fmt in _FORMATS
+            ]
+        ]
+    )
+
+
+def _format_keyboard(task_id, exclude=None):
+    """Post-report buttons offering the report in the OTHER formats (all but the
+    one already delivered). The task id rides in callback_data so the tap handler
+    can re-fetch and re-render on demand (stateless — nothing held in memory)."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    row = [
+        InlineKeyboardButton(text=label, callback_data=f"fmt:{fmt}:{task_id}")
+        for label, fmt in _FORMATS
+        if fmt != exclude
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
 def build_router():
@@ -72,10 +113,12 @@ def build_router():
 
     @router.message(F.text)
     async def on_text(message: Message) -> None:
+        """Persist the question as a pending task and ask which depth to run it
+        at. The task is created now (so its id can ride in the buttons' callback
+        data) but only ENQUEUED once the user taps a depth — see on_depth."""
         from research_assistant.storage.db import get_sessionmaker
         from research_assistant.storage.models import SourceType
         from research_assistant.storage.repository import ResearchTaskRepository
-        from research_assistant.tasks import run_research_task
 
         user_id = f"telegram:{message.from_user.id}"
         query = message.text or ""
@@ -84,13 +127,81 @@ def build_router():
             task = await ResearchTaskRepository(session).create(
                 user_id=user_id, query=query, source=SourceType.telegram
             )
-        run_research_task.delay(str(task.id))
+        await message.answer(
+            "How deep should I go?\n"
+            "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
+            reply_markup=_depth_keyboard(task.id),
+        )
 
-        placeholder = await message.answer("🔍 Researching… this can take a minute.")
+    @router.callback_query(F.data.startswith("depth:"))
+    async def on_depth(callback) -> None:
+        """A depth button tap: keep the task pending and ask for the output
+        FORMAT next (second step). Guarded so a tap on a stale/already-running
+        question can't re-open the chooser."""
+        from research_assistant.storage.db import get_sessionmaker
+        from research_assistant.storage.models import TaskStatus
+        from research_assistant.storage.repository import ResearchTaskRepository
+
+        try:
+            _, depth, tid = (callback.data or "").split(":", 2)
+            task_id = uuid.UUID(tid)
+        except ValueError:
+            await callback.answer()
+            return
+
+        async with get_sessionmaker()() as session:
+            task = await ResearchTaskRepository(session).get(task_id)
+        if task is None:
+            await callback.answer("This question is no longer available.", show_alert=True)
+            return
+        if task.status != TaskStatus.pending:
+            await callback.answer("Already running — hang tight.")
+            return
+
+        await callback.message.edit_text(
+            f"Depth: {depth}. Which format should the report be?",
+            reply_markup=_run_keyboard(depth, task_id),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("run:"))
+    async def on_run(callback) -> None:
+        """A format button tap (after depth): enqueue the pending task with the
+        chosen depth and start rendering its progress in the chosen format.
+        Guarded so a second tap can't enqueue the same task twice."""
+        from research_assistant.storage.db import get_sessionmaker
+        from research_assistant.storage.models import TaskStatus
+        from research_assistant.storage.repository import ResearchTaskRepository
+        from research_assistant.tasks import run_research_task
+
+        try:
+            _, depth, fmt, tid = (callback.data or "").split(":", 3)
+            task_id = uuid.UUID(tid)
+        except ValueError:
+            await callback.answer()
+            return
+
+        async with get_sessionmaker()() as session:
+            task = await ResearchTaskRepository(session).get(task_id)
+        if task is None:
+            await callback.answer("This question is no longer available.", show_alert=True)
+            return
+        if task.status != TaskStatus.pending:
+            await callback.answer("Already running — hang tight.")
+            return
+
+        run_research_task.delay(str(task_id), depth)
+
+        # Replace the chooser with a live status line; that same message becomes
+        # the placeholder _await_and_render edits into the final report.
+        placeholder = await callback.message.edit_text(
+            f"🔍 Researching… ({depth} · {fmt}) — this can take a minute."
+        )
+        await callback.answer()
         # Fire-and-forget: research takes minutes; awaiting it here would block
         # this user's update handler and queue their next messages. Track the
         # task so it isn't garbage-collected before it finishes.
-        render = asyncio.create_task(_await_and_render(task.id, placeholder))
+        render = asyncio.create_task(_await_and_render(task_id, placeholder, fmt))
         _RENDER_TASKS.add(render)
         render.add_done_callback(_RENDER_TASKS.discard)
 
@@ -131,8 +242,9 @@ def build_router():
     return router
 
 
-async def _await_and_render(task_id: uuid.UUID, placeholder) -> None:
-    """Tail the task's events; edit the placeholder once it's terminal.
+async def _await_and_render(task_id: uuid.UUID, placeholder, fmt: str = "md") -> None:
+    """Tail the task's events; edit the placeholder once it's terminal, then
+    deliver the report in `fmt` (the format the user picked up front).
 
     Isolated in its own coroutine so an event-bus error surfaces as a friendly
     message rather than crashing this user's polling loop (and never touching
@@ -158,19 +270,27 @@ async def _await_and_render(task_id: uuid.UUID, placeholder) -> None:
                         "⚠️ Research finished but produced no report. Please try again."
                     )
                     return
-                # Send the full report as a .md file, not a truncated message:
-                # Telegram caps a text message at 4096 chars, which silently cut
-                # the tail off any real report. Attachment preserves it whole.
-                # Inline buttons offer the same report as DOCX / PDF on demand.
+                # Send the full report as a file, not a truncated message: Telegram
+                # caps a text message at 4096 chars, which silently cut the tail off
+                # any real report. Render in the chosen format, but if that format's
+                # optional dep/font is missing, fall back to Markdown with a note
+                # rather than leaving the user with nothing.
+                delivered, note = fmt, ""
+                try:
+                    data = reporting.render(_task_dict(task), fmt)
+                except (ModuleNotFoundError, RuntimeError, ValueError) as e:
+                    delivered = "md"
+                    data = reporting.render(_task_dict(task), "md")
+                    note = f"\n\n⚠️ Couldn't produce {fmt.upper()} ({str(e)[:150]}) — sent Markdown instead."
                 document = BufferedInputFile(
-                    reporting.render(_task_dict(task), "md"),
-                    filename=f"{reporting.slugify(task.query)}.md",
+                    data, filename=f"{reporting.slugify(task.query)}.{delivered}"
                 )
-                await placeholder.edit_text("✅ Done — report attached below.")
+                await placeholder.edit_text(f"✅ Done — {delivered.upper()} report attached below.")
+                # Buttons offer the report in the remaining formats on demand.
                 await placeholder.answer_document(
                     document,
-                    caption=f"📄 {task.query[:1000]}",
-                    reply_markup=_format_keyboard(task.id),
+                    caption=f"📄 {task.query[:1000]}{note}",
+                    reply_markup=_format_keyboard(task.id, exclude=delivered),
                 )
                 return
     except Exception as e:  # noqa: BLE001 — keep this user's bot alive

@@ -64,8 +64,9 @@ def _run(coro):
     return _runner.run(coro)
 
 
-async def _run_pipeline(task_id: uuid.UUID) -> None:
+async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
     from research_assistant.agents.graph import build_graph
+    from research_assistant.agents.profiles import get_profile
     from research_assistant.core.exceptions import TaskExecutionError
     from research_assistant.events.publisher import make_publisher
     from research_assistant.llm.factory import config_from_settings, get_provider
@@ -84,6 +85,10 @@ async def _run_pipeline(task_id: uuid.UUID) -> None:
         query = task.query
 
     # 2. wire dependencies (injected — agents import none of these)
+    # Depth profile scales the three effort levers together (sub-questions,
+    # sources per sub-question, Critic->Researcher rounds). Falls back to the
+    # default profile when the caller passes no depth.
+    profile = get_profile(depth)
     settings = get_settings()
     config = config_from_settings()
     provider = get_provider(config)
@@ -102,9 +107,11 @@ async def _run_pipeline(task_id: uuid.UUID) -> None:
             provider=provider,
             tools=tools,
             publish=publish,
-            max_revisions=settings.max_revisions,
+            max_revisions=profile.max_revisions,
             config=config,
             checkpointer=checkpointer,
+            target_subquestions=profile.sub_questions,
+            max_results=profile.max_results,
         )
         final = await graph.ainvoke(
             {"query": query},
@@ -159,13 +166,18 @@ async def _fail(task_id: uuid.UUID, message: str) -> None:
     max_retries=2,
     default_retry_delay=10,
 )
-def run_research_task(self, task_id: str):
+def run_research_task(self, task_id: str, depth: str | None = None):
     """Celery entrypoint. Bridges sync→async with asyncio.run (one event loop
-    per attempt). Re-raises so Celery's retry/ack machinery sees the failure."""
+    per attempt). Re-raises so Celery's retry/ack machinery sees the failure.
+
+    `depth` (quick | standard | deep) selects the pipeline effort profile; None
+    falls back to the default profile. It rides as a task argument rather than a
+    ResearchTask column so no schema migration is needed.
+    # EXTENSION: persist depth on the task row for history/reproducibility."""
     configure_logging()
     tid = uuid.UUID(task_id)
     try:
-        _run(_run_pipeline(tid))
+        _run(_run_pipeline(tid, depth))
     except _TRANSIENT as exc:
         log.warning("research_task_transient", task_id=task_id, error=str(exc))
         if self.request.retries < self.max_retries:
