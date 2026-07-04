@@ -172,7 +172,10 @@ research bot connect <bot_token>   # attach a Telegram bot via the same API
 ```
 
 `ask` / `repl` open the SSE stream, render Planner → Researchers → Critic → Synthesizer
-progress live, then print the report as Markdown. In the REPL a follow-up line
+progress live, then print the report as Markdown. Each run is also saved to
+`exports/<query-slug>.md`; pass `--format docx` or `--format pdf` to save that instead
+(`pip install "research-assistant[export]"` for the pure-pip `python-docx` / `fpdf2`
+backends). In the REPL a follow-up line
 (`and his trophies?`, `why?`) is folded into the previous question so the pipeline keeps
 the subject; `new` clears the running topic. Config can also come from `RESEARCHY_API_URL` /
 `RESEARCHY_API_KEY` (CI-friendly).

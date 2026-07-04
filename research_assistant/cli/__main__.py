@@ -14,7 +14,7 @@ import time
 
 import httpx
 
-from research_assistant.cli import config, render
+from research_assistant.cli import config, export, render
 from research_assistant.cli.client import APIError, ResearchClient
 
 
@@ -39,56 +39,26 @@ def _await_final(client: ResearchClient, task_id: str, *, tries: int = 30, delay
     return task
 
 
-def _slugify(text: str, maxlen: int = 60) -> str:
-    """Filesystem-safe stem derived from the query: 'Who is Ronaldo?' -> 'who-is-ronaldo'."""
-    import re
-
-    s = re.sub(r"[^\w\s-]", "", text.lower())
-    s = re.sub(r"[\s_-]+", "-", s).strip("-")
-    return s[:maxlen].strip("-") or "report"
-
-
-def _save_report(task: dict):
-    """Write a finished report to exports/<query-slug>.md — the file name follows
-    the query, so each question lands in its own file. Returns the path or None."""
-    if task.get("status") != "done" or not task.get("final_report"):
-        return None
-    from datetime import datetime
-    from pathlib import Path
-
-    exports = Path("exports")
-    exports.mkdir(exist_ok=True)
-    path = exports / f"{_slugify(task.get('query', 'report'))}.md"
-
-    lines = [
-        f"# Research report — {task.get('query', '')}",
-        "",
-        f"*task {str(task.get('id', ''))[:8]} · {datetime.now():%Y-%m-%d %H:%M}*",
-        "",
-        task.get("final_report", ""),
-    ]
-    sources = task.get("sources") or []
-    if sources:
-        lines += ["", "## Sources", ""]
-        for i, s in enumerate(sources, 1):
-            lines.append(f"{i}. [{s.get('title', '')}]({s.get('url', '')})")
-    total = task.get("total_tokens") or 0
-    if total:
-        lines += ["", f"*tokens: {total:,}*"]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return path
+def _emit_saved(task: dict, fmt: str) -> None:
+    """Save the report in `fmt` and print where it landed, turning a missing
+    optional dependency / font into a one-line message instead of a traceback."""
+    try:
+        saved = export.save_report(task, fmt)
+    except (ModuleNotFoundError, RuntimeError, ValueError) as e:
+        print(f"✗ {e}")
+        return
+    if saved:
+        print(f"saved → {saved}")
 
 
-def _run_research(client: ResearchClient, query: str) -> None:
+def _run_research(client: ResearchClient, query: str, fmt: str = "md") -> None:
     """Submit a query, stream live progress, render the report, save it to a file."""
     task = client.create_research(query)
     task_id = task["id"]
     render.run_progress(client.stream_events(task_id))
     final = _await_final(client, task_id)
     render.render_report(final)
-    saved = _save_report(final)
-    if saved:
-        print(f"saved → {saved}")
+    _emit_saved(final, fmt)
 
 
 def _guard(fn) -> int:
@@ -107,7 +77,7 @@ def _guard(fn) -> int:
 # --- subcommand handlers -----------------------------------------------------
 
 
-def _run_local(query: str, depth: str | None) -> int:
+def _run_local(query: str, depth: str | None, fmt: str = "md") -> int:
     """Run the pipeline in-process (no API/Celery/Redis) and render the report."""
     from research_assistant.cli.local import run_local
 
@@ -117,16 +87,14 @@ def _run_local(query: str, depth: str | None) -> int:
         print(f"✗ local run failed: {e}")
         return 1
     render.render_report(task)
-    saved = _save_report(task)
-    if saved:
-        print(f"saved → {saved}")
+    _emit_saved(task, fmt)
     return 0
 
 
 def _cmd_ask(args) -> int:
     if args.local:
-        return _run_local(args.query, args.depth)
-    return _guard(lambda: _with_client(lambda c: _run_research(c, args.query)))
+        return _run_local(args.query, args.depth, args.format)
+    return _guard(lambda: _with_client(lambda c: _run_research(c, args.query, args.format)))
 
 
 def _cmd_history(args) -> int:
@@ -221,6 +189,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=["quick", "standard", "deep"],
         default=None,
         help="effort level for --local runs (default: standard)",
+    )
+    ask.add_argument(
+        "--format",
+        choices=export.FORMATS,
+        default="md",
+        help="report file format (default: md; docx/pdf need the 'export' extra)",
     )
 
     sub.add_parser("history", help="list your past research tasks")
