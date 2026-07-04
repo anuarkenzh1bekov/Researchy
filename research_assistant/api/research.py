@@ -82,36 +82,51 @@ async def stream_research(
     principal: str = Depends(require_principal),
     session: AsyncSession = Depends(get_session),
 ) -> StreamingResponse:
-    """SSE progress. Replays persisted events first (so a client reconnecting
-    mid-task catches up), then forwards live ones until a terminal event.
-
-    NOTE: a tiny gap exists between replay and live-subscribe where an event
-    could be missed; acceptable for the MVP. The durable fix is to subscribe
-    first, buffer, then replay-and-dedupe — left as a # EXTENSION.
-    """
-    from research_assistant.events.subscriber import is_terminal, iter_events
+    """SSE progress. Subscribes live FIRST, then replays persisted events (so a
+    client reconnecting mid-task catches up), then forwards the live tail until
+    a terminal event. Subscribe-before-replay closes the gap where an event
+    published between the replay query and the subscription would be lost;
+    anything delivered both ways is deduped by its durable event_id."""
+    from research_assistant.events import subscriber
 
     # ownership gate before opening the stream
     await _owned_task_or_404(task_id, principal, ResearchTaskRepository(session))
 
     async def gen() -> AsyncIterator[str]:
-        # 1. catch-up from the durable log (oldest-first).
-        replayed = await AgentEventRepository(session).list_by_task(task_id)
-        for e in replayed:
-            event = {
-                "event_id": str(e.id),
-                "created_at": e.created_at.isoformat(),
-                "task_id": str(task_id),
-                "agent_name": e.agent_name,
-                "event_type": e.event_type,
-                "payload": e.payload,
-            }
-            yield _sse(event)
-            if is_terminal(event):
-                return  # already finished before the client connected
+        # 1. open the live subscription BEFORE the replay query — events
+        #    published from here on are buffered by the pub/sub connection.
+        pubsub = await subscriber.subscribe(task_id)
 
-        # 2. live tail until terminal.
-        async for event in iter_events(task_id):
-            yield _sse(event)
+        # 2. catch-up from the durable log (oldest-first), tracking ids so the
+        #    live tail can skip anything the replay already delivered. Until the
+        #    hand-off to iter_events (which owns cleanup), we must close pubsub
+        #    on ANY exit: replay-found-terminal, client disconnect, DB error.
+        handed_over = False
+        try:
+            seen: set[str] = set()
+            replayed = await AgentEventRepository(session).list_by_task(task_id)
+            for e in replayed:
+                event = {
+                    "event_id": str(e.id),
+                    "created_at": e.created_at.isoformat(),
+                    "task_id": str(task_id),
+                    "agent_name": e.agent_name,
+                    "event_type": e.event_type,
+                    "payload": e.payload,
+                }
+                seen.add(event["event_id"])
+                yield _sse(event)
+                if subscriber.is_terminal(event):
+                    return  # already finished before the client connected
+
+            # 3. live tail until terminal (iter_events owns pubsub cleanup now).
+            handed_over = True
+            async for event in subscriber.iter_events(task_id, pubsub=pubsub):
+                if event.get("event_id") in seen:
+                    continue  # replay already sent it
+                yield _sse(event)
+        finally:
+            if not handed_over:
+                await pubsub.aclose()
 
     return StreamingResponse(gen(), media_type="text/event-stream")

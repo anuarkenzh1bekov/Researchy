@@ -126,14 +126,19 @@ cp .env.example .env
 #   local: LLM_MODEL=ollama/llama3.2   + LLM_API_BASE=http://localhost:11434
 #   web search: TAVILY_API_KEY=...     (Researchers need it for web sources)
 
-# 4. API
+# 4. schema - Alembic migrations own the schema
+alembic upgrade head
+#   (in APP_ENV=local the API also create_all's on startup, so this is optional
+#    for a first run - but it's the real path and required outside local)
+
+# 5. API
 uvicorn research_assistant.api.app:app --reload
 
-# 5. Celery worker  (separate terminal)
+# 6. Celery worker  (separate terminal)
 celery -A research_assistant.tasks.celery_app worker --loglevel=info
 #   on Windows, add:  --pool=solo
 
-# 6. issue an API key - no signup; identity comes from the key
+# 7. issue an API key - no signup; identity comes from the key
 python -m research_assistant.scripts.issue_api_key u1
 #   → prints a raw key once; export it:  KEY=<the key>
 #   (or set API_AUTH_ENABLED=false in .env to run open for quick curls)

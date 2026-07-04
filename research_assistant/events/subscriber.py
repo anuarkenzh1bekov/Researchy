@@ -41,9 +41,15 @@ async def subscribe(task_id: uuid.UUID):
     return pubsub
 
 
-async def iter_events(task_id: uuid.UUID) -> AsyncIterator[dict]:
-    """Yield decoded live events for a task until a terminal one, then clean up."""
-    pubsub = await subscribe(task_id)
+async def iter_events(task_id: uuid.UUID, *, pubsub=None) -> AsyncIterator[dict]:
+    """Yield decoded live events for a task until a terminal one, then clean up.
+
+    `pubsub` lets a caller that must subscribe EARLY (the SSE route subscribes
+    before its DB replay so no event falls between them) hand over an existing
+    subscription; ownership transfers here and it is closed on exit either way.
+    """
+    if pubsub is None:
+        pubsub = await subscribe(task_id)
     try:
         async for msg in pubsub.listen():
             if msg.get("type") != "message":

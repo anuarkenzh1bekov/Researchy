@@ -46,11 +46,16 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Ensure pgvector extension + create tables.
+    """Local-dev convenience: ensure pgvector extension + create tables.
 
-    # ponytail: create_all is the MVP path. Alembic (already a dep) is the real
-    # migration tool — generate versions from these models when schema evolves.
+    Runs ONLY when app_env == "local" (zero-friction `docker compose up` +
+    start). Everywhere else the schema is owned by Alembic — run
+    `alembic upgrade head` as a deploy step; startup must not silently
+    create or patch tables behind the migration history's back.
     """
+    if get_settings().app_env != "local":
+        return
+
     # import for side effect: registers all tables on SQLModel.metadata.
     from research_assistant.storage import models  # noqa: F401
 
