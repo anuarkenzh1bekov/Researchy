@@ -124,6 +124,7 @@ pip install -e ".[dev]"
 cp .env.example .env
 #   cloud: LLM_MODEL=openai/gpt-4o     + OPENAI_API_KEY=...
 #   local: LLM_MODEL=ollama/llama3.2   + LLM_API_BASE=http://localhost:11434
+#   web search: TAVILY_API_KEY=...     (Researchers need it for web sources)
 
 # 4. API
 uvicorn research_assistant.api.app:app --reload
@@ -150,6 +151,8 @@ curl -X POST localhost:8000/research -H "Authorization: Bearer $KEY" \
 curl -N -H "Authorization: Bearer $KEY" localhost:8000/research/<id>/stream
 
 # connect a Telegram bot, bound to the authenticated user
+#   needs API_ENCRYPTION_KEY set in .env - the token is Fernet-encrypted at rest
+#   generate one: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 curl -X POST localhost:8000/bot/connect -H "Authorization: Bearer $KEY" \
   -H 'content-type: application/json' -d '{"bot_token":"123:ABC"}'
 ```
