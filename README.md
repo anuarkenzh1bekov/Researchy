@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🔬 Researchy
+# 🧐 Researchy
 
 **A multi-agent research assistant that turns a question into a sourced report.**
 
