@@ -76,6 +76,20 @@ def test_bib_entry_academic_uses_authors_and_year():
     assert "Attention Is All You Need" in entry
 
 
+def test_bib_entry_long_web_title_shortened_in_author_slot():
+    # apalike prints the author slot in every in-text citation — a 10-word title
+    # there is unreadable. APA shortens long no-author titles to the first words;
+    # the full title then rides in the title field for the References entry.
+    long_src = {
+        "title": "Prompt Caching in 2026: Cut LLM Costs, Keep Quality and Speed",
+        "url": "https://example.com/x",
+        "source_type": "web",
+    }
+    entry = bib_entry(3, long_src)
+    assert "author = {{Prompt Caching in 2026: Cut LLM ...}}" in entry
+    assert "title = {{Prompt Caching in 2026: Cut LLM Costs, Keep Quality and Speed}}" in entry
+
+
 def test_bib_entry_web_falls_back_to_title_author_and_nd():
     entry = bib_entry(1, WEB_SRC)
     assert entry.startswith("@misc{src1,")

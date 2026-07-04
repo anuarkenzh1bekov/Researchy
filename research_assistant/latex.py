@@ -74,10 +74,20 @@ def bib_entry(index: int, source: dict) -> str:
         ]
         kind = "article"
     else:
-        # no title field: the title already sits in the author slot, and apalike
-        # would print it twice ("Title (n.d.). Title. url").
-        fields = [
-            f"author = {{{{{title}}}}}",
+        # APA no-author fallback: the title takes the author slot. apalike prints
+        # that slot in every in-text citation, so shorten long titles to their
+        # first words (per APA) and keep the full title in the title field for
+        # the References entry. Short titles skip the title field entirely, or
+        # apalike would print the same text twice ("Title (n.d.). Title. url").
+        words = title.split()
+        if len(words) > 6:
+            fields = [
+                f"author = {{{{{' '.join(words[:6])} ...}}}}",
+                f"title = {{{{{title}}}}}",
+            ]
+        else:
+            fields = [f"author = {{{{{title}}}}}"]
+        fields += [
             f"year = {{{year if year else 'n.d.'}}}",
             f"howpublished = {{\\url{{{url}}}}}",
         ]

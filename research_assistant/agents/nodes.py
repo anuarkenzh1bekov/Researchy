@@ -36,14 +36,20 @@ def _planner_messages(query: str, n: int = 4) -> list[Message]:
         Message(
             role="system",
             content=(
-                "You are the Planner in a multi-agent research pipeline. Break the "
-                f"question into about {n} sub-questions that together fully cover it "
-                "(use fewer if the topic is narrow, more if it's broad).\n"
+                "You are the Planner in a multi-agent pipeline that produces an "
+                "academic-style research paper. Break the question into about "
+                f"{n} sub-questions that together fully cover it (use fewer if the "
+                "topic is narrow, more if it's broad). Each becomes one body "
+                "section of the paper, so plan them like a paper outline:\n"
                 "- Each targets a DISTINCT facet: no overlap, don't restate the goal.\n"
                 "- Make each self-contained — name the subject explicitly ('Ronaldo's "
                 "trophies', not 'his trophies') so it can be researched on its own.\n"
-                "- Favour open questions answerable from web sources; avoid yes/no.\n"
-                "- Order them foundational first, specific last.\n"
+                "- Open with a foundational facet (definitions, background, context "
+                "the later sections build on); progress to mechanisms, evidence and "
+                "comparisons; when the topic supports it, end with a facet on "
+                "limitations, trade-offs or open problems.\n"
+                "- Favour open questions answerable from web and academic sources; "
+                "avoid yes/no.\n"
                 'Reply with ONLY JSON: {"sub_questions": ["...", "..."]}.'
             ),
         ),
@@ -59,14 +65,25 @@ def _researcher_messages(query: str, sub_question: str, results: list[ToolResult
         Message(
             role="system",
             content=(
-                "You are a Researcher. Answer the sub-question using ONLY the "
-                "provided sources — never your own prior knowledge.\n"
-                "- Cite every claim inline by its [n] index.\n"
+                "You are a Researcher gathering evidence for an academic research "
+                "paper. Answer the sub-question using ONLY the provided sources — "
+                "never your own prior knowledge.\n"
+                "- Cite every claim inline by its [n] index; an uncited claim will "
+                "be rejected by the reviewer.\n"
+                "- Weigh sources: prefer academic sources for scientific or "
+                "quantitative claims; use web sources for context, industry facts "
+                "and recency. When sources disagree, present both positions with "
+                "citations and say which is better supported and why.\n"
+                "- Extract specifics — names, numbers, dates, methods, results — "
+                "not vague summaries; explain nuances rather than glossing over them.\n"
                 "- If the sources are thin, conflicting, or don't answer it, say so "
                 "plainly instead of guessing or filling the gap.\n"
-                "- Be thorough and detailed: cover every relevant point the sources "
-                "support, with specifics — names, numbers, dates, context — and "
-                "explain nuances and disagreements rather than glossing over them."
+                "- Write formal, neutral prose paragraphs (occasional '- ' bullets "
+                "are fine) with NO headings — your text is merged into a larger "
+                "paper whose structure is added later.\n"
+                "- Write any math in plain text (e.g. O(t*d^2), QK^T/sqrt(d_k)); "
+                "never LaTeX markup like \\( \\frac \\text — the renderers print "
+                "it literally as garbage."
             ),
         ),
         Message(
@@ -85,8 +102,11 @@ def _critic_messages(query: str, findings: list[Finding]) -> list[Message]:
         Message(
             role="system",
             content=(
-                "You are the Critic. Review the findings together for gaps, "
-                "contradictions, or unsupported claims. Reply with ONLY JSON: "
+                "You are the Critic holding the findings to an academic-paper "
+                "standard. Review them together for: facets of the goal left "
+                "unanswered; contradictions left unresolved; uncited or unsupported "
+                "claims; and important claims resting on a single thin source. "
+                "Reply with ONLY JSON: "
                 '{"approved": bool, "gaps": ["<exact sub-question to redo>", ...]}. '
                 "Each gap MUST be copied VERBATIM from one of the '### ...' "
                 "sub-question headings below — pick the ones whose findings are "
@@ -117,17 +137,27 @@ def _synthesizer_messages(
                 "no heading (the renderers turn the leading paragraph into the "
                 "paper's Abstract): what was investigated, key findings, conclusion.\n"
                 "- Then a '## Introduction' section: context and motivation for the "
-                "goal question, and a brief roadmap of the sections that follow.\n"
+                "goal question, key terms defined at first use, and a brief roadmap "
+                "of the sections that follow. Do not repeat the abstract's wording.\n"
                 "- Then one '## ' section per sub-question, in the order given, with "
                 "a concise descriptive section title (not the question verbatim).\n"
                 "- Close with a '## Conclusion' section: synthesize the sections "
                 "into a direct answer to the goal, and note limitations or open "
-                "questions the evidence leaves.\n"
+                "questions the evidence leaves. Introduce no new facts here.\n"
+                "- Headings: '## ' for sections, '### ' for subsections only; never "
+                "a single '# ' title (the renderers add the title page). Do not "
+                "number headings — the document class numbers them itself.\n"
+                "- Formal, neutral academic register, third person; flowing prose "
+                "paragraphs with topic sentences and transitions between sections — "
+                "not bullet-point inventories. Use '- ' bullets only for genuinely "
+                "enumerable items.\n"
                 "- Be thorough: develop each section in depth, several substantial "
                 "paragraphs, covering every relevant detail the findings support "
                 "(specifics, numbers, context, caveats) rather than summarising "
                 "briefly. Do not omit supporting detail for the sake of brevity.\n"
                 "- Use only facts present in the findings; invent nothing.\n"
+                "- Write any math in plain text (e.g. O(t*d^2)); never LaTeX "
+                "markup like \\( \\frac \\text — the renderers print it literally.\n"
                 "- Keep the [n] citations exactly as they appear in the findings — "
                 "they index the numbered Sources list and must stay consistent. "
                 "Cite in every section, including Introduction and Conclusion "
