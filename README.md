@@ -33,9 +33,6 @@ Telegram bot ship in the repo; both are *just API consumers*, importing no serve
 
 ## 🎬 Demo
 
-The CLI streaming a full run end to end - Planner → Researchers → Critic → Synthesizer -
-in `--local` mode (no infra):
-
 ![Researchy running locally](docs/demo.gif)
 
 ## ✨ Key features
@@ -249,6 +246,15 @@ comments in code; no schema migration required:
 - Custom user-defined agents (`LLMAgentConfig` schema sketch - flip `table=True` to enable)
 - Confidence scoring on findings
 - Threading depth profiles through the API / Celery path (currently `--local` only)
+
+## 🤖 Build prompt
+
+The full spec this project was built from lives at
+[`docs/claude_code_prompt.md`](docs/claude_code_prompt.md) - a single self-contained prompt
+that hands Claude Code (or a similar agent) everything it needs to reconstruct the backend
+from an empty directory: hard requirements, architecture, tech stack, and the layer-by-layer
+build order. Drop it into an empty repo to regenerate the project, or use it as a template
+for briefing agents on your own builds.
 
 ## 📄 License
 
