@@ -83,6 +83,8 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
             raise TaskExecutionError(f"research task {task_id} not found")
         await repo.update_status(task_id, TaskStatus.running)
         query = task.query
+        urls = task.source_urls
+        draft = task.draft_text
 
     # 2. wire dependencies (injected — agents import none of these)
     # Depth profile scales the three effort levers together (sub-questions,
@@ -94,6 +96,20 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
     provider = get_provider(config)
     tools = get_tools()
     publish = make_publisher(task_id)
+
+    # 2b. user-supplied sites: scrape eagerly BEFORE the graph (the parallel
+    # researcher fan-out would race a lazy first fetch), persist the per-URL
+    # report so clients can show what loaded and what failed, and only add the
+    # tool when at least one URL yielded content.
+    if urls:
+        from research_assistant.tools.web_scraper import UserSourcesTool
+
+        scraper = UserSourcesTool(urls)
+        scrape_report = await scraper.prepare(publish)
+        async with get_sessionmaker()() as session:
+            await ResearchTaskRepository(session).save_scrape_report(task_id, scrape_report)
+        if any(r["status"] != "failed" for r in scrape_report):
+            tools = [*tools, scraper]
 
     # 3. run the graph under a Postgres checkpointer keyed by task_id.
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
@@ -113,8 +129,11 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
             target_subquestions=profile.sub_questions,
             max_results=profile.max_results,
         )
+        inputs: dict = {"query": query}
+        if draft:
+            inputs["user_draft"] = draft
         final = await graph.ainvoke(
-            {"query": query},
+            inputs,
             config={"configurable": {"thread_id": str(task_id)}},
         )
 

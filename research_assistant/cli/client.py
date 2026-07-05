@@ -40,8 +40,15 @@ class ResearchClient:
         return resp.json()
 
     # --- research ---
-    def create_research(self, query: str) -> dict:
-        return self._ok(self._http.post("/research", json={"query": query}))  # type: ignore[return-value]
+    def create_research(
+        self, query: str, *, urls: list[str] | None = None, draft: str | None = None
+    ) -> dict:
+        body: dict = {"query": query}
+        if urls:
+            body["urls"] = urls
+        if draft:
+            body["draft"] = draft
+        return self._ok(self._http.post("/research", json=body))  # type: ignore[return-value]
 
     def get_task(self, task_id: str) -> dict:
         return self._ok(self._http.get(f"/research/{task_id}"))  # type: ignore[return-value]

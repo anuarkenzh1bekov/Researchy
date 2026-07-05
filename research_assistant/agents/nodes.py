@@ -27,11 +27,27 @@ from research_assistant.tools.base import ResearchTool, ToolResult
 
 log = get_logger(__name__)
 
+# Draft excerpt budgets: the planner only needs enough to see the draft's
+# structure and gaps; the synthesizer gets (almost) all of it.
+PLANNER_DRAFT_CHARS = 3_000
+SYNTH_DRAFT_CHARS = 30_000
+
 
 # --- prompts (each names its role so a content-routing fake can match) -------
 
 
-def _planner_messages(query: str, n: int = 4) -> list[Message]:
+def _planner_messages(query: str, n: int = 4, draft: str | None = None) -> list[Message]:
+    user_content = query
+    if draft:
+        excerpt = draft[:PLANNER_DRAFT_CHARS]
+        marker = "\n[... draft continues ...]" if len(draft) > PLANNER_DRAFT_CHARS else ""
+        user_content = (
+            f"{query}\n\n"
+            "The user provided a draft of their paper. Aim the sub-questions at "
+            "strengthening and completing this draft — verify its claims and fill "
+            "its gaps; do not re-research what it already covers well.\n\n"
+            f"--- DRAFT ---\n{excerpt}{marker}"
+        )
     return [
         Message(
             role="system",
@@ -62,7 +78,7 @@ def _planner_messages(query: str, n: int = 4) -> list[Message]:
                 'preventing lithium-ion battery degradation?"]}'
             ),
         ),
-        Message(role="user", content=query),
+        Message(role="user", content=user_content),
     ]
 
 
@@ -170,8 +186,16 @@ def _critic_messages(query: str, findings: list[Finding]) -> list[Message]:
 
 
 def _synthesizer_messages(
-    query: str, findings: list[Finding], sources: list[dict]
+    query: str, findings: list[Finding], sources: list[dict], draft: str | None = None
 ) -> list[Message]:
+    draft_rule = (
+        "- The user provided a DRAFT of the paper. Build the paper ON that draft: "
+        "preserve its structure, thesis and voice; integrate the findings with [n] "
+        "citations; expand thin sections; do not discard the user's original "
+        "content.\n"
+        if draft
+        else ""
+    )
     body = "\n\n".join(f"### {f['sub_question']}\n{f['answer']}" for f in findings)
     src_list = "\n".join(
         f"[{i}] {s.get('title', '')} ({s.get('url', '')})" for i, s in enumerate(sources, 1)
@@ -218,12 +242,16 @@ def _synthesizer_messages(
                 "where they draw on the findings.\n"
                 "- If findings conflict or a sub-question went unanswered, say so "
                 "rather than papering over it.\n"
+                f"{draft_rule}"
                 "Write prose, not JSON, and no meta-commentary about being an AI."
             ),
         ),
         Message(
             role="user",
-            content=f"Goal: {query}\n\nFindings:\n{body}\n\nSources:\n{src_list}",
+            content=(
+                f"Goal: {query}\n\nFindings:\n{body}\n\nSources:\n{src_list}"
+                + (f"\n\nUser draft (build on this):\n{draft[:SYNTH_DRAFT_CHARS]}" if draft else "")
+            ),
         ),
     ]
 
@@ -318,7 +346,7 @@ async def planner_node(
     try:
         out, usage = await complete_json(
             provider,
-            _planner_messages(state["query"], target_subquestions),
+            _planner_messages(state["query"], target_subquestions, draft=state.get("user_draft")),
             config=llm_config,
             schema=PlannerOutput,
         )
@@ -416,7 +444,10 @@ async def synthesizer_node(
             for i, f in enumerate(state["findings"])
         ]
         resp = await provider.complete(
-            _synthesizer_messages(state["query"], findings, sources), config=llm_config
+            _synthesizer_messages(
+                state["query"], findings, sources, draft=state.get("user_draft")
+            ),
+            config=llm_config,
         )
         usage = _usage(resp)
         result = {

@@ -44,8 +44,11 @@ class FakeTaskRepo:
     def __init__(self, session) -> None:
         pass
 
-    async def create(self, *, user_id, query, source):
-        task = ResearchTask(user_id=user_id, query=query, source=source)
+    async def create(self, *, user_id, query, source, urls=None, draft=None):
+        task = ResearchTask(
+            user_id=user_id, query=query, source=source,
+            source_urls=urls, draft_text=draft,
+        )
         self.tasks[task.id] = task
         return task
 
@@ -261,3 +264,49 @@ async def test_stream_subscribes_before_replay_and_dedupes(client, monkeypatch):
     ids = [f["event_id"] for f in frames]
     assert len(ids) == len(set(ids)), f"duplicate events sent: {ids}"
     assert [f["agent_name"] for f in frames] == ["planner", "synthesizer"]
+
+
+# --- user sources + draft ---------------------------------------------------------
+
+
+async def test_create_with_urls_and_draft(client):
+    body = {"query": "q", "urls": ["https://ok.test/a"], "draft": "my draft"}
+    r = await client.post("/research", json=body, headers=_auth())
+    assert r.status_code == 201
+    view = r.json()
+    assert view["urls"] == ["https://ok.test/a"]
+    assert view["has_draft"] is True
+    assert view["scrape_report"] is None
+
+
+async def test_create_rejects_bad_url_scheme(client):
+    r = await client.post(
+        "/research", json={"query": "q", "urls": ["ftp://x.test"]}, headers=_auth()
+    )
+    assert r.status_code == 422
+
+
+async def test_create_rejects_six_urls(client):
+    urls = [f"https://s{i}.test" for i in range(6)]
+    r = await client.post("/research", json={"query": "q", "urls": urls}, headers=_auth())
+    assert r.status_code == 422
+
+
+async def test_draft_extract_txt(client):
+    files = {"file": ("d.txt", b"hello draft", "text/plain")}
+    r = await client.post("/research/draft-extract", files=files, headers=_auth())
+    assert r.status_code == 200
+    assert r.json() == {"text": "hello draft", "truncated": False}
+
+
+async def test_draft_extract_unsupported_format(client):
+    files = {"file": ("d.rtf", b"x", "application/rtf")}
+    r = await client.post("/research/draft-extract", files=files, headers=_auth())
+    assert r.status_code == 422
+    assert "unsupported draft format" in r.json()["detail"]
+
+
+async def test_draft_extract_requires_auth(client):
+    files = {"file": ("d.txt", b"x", "text/plain")}
+    r = await client.post("/research/draft-extract", files=files)
+    assert r.status_code == 401

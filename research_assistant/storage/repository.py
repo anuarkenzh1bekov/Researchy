@@ -35,9 +35,19 @@ class ResearchTaskRepository:
         self._s = session
 
     async def create(
-        self, *, user_id: str, query: str, source: SourceType = SourceType.web
+        self,
+        *,
+        user_id: str,
+        query: str,
+        source: SourceType = SourceType.web,
+        urls: list[str] | None = None,
+        draft: str | None = None,
     ) -> ResearchTask:
-        task = ResearchTask(user_id=user_id, query=query, source=source)
+        """urls/draft are stored as source_urls/draft_text (user-supplied research material)."""
+        task = ResearchTask(
+            user_id=user_id, query=query, source=source,
+            source_urls=urls, draft_text=draft,
+        )
         try:
             self._s.add(task)
             await self._s.commit()
@@ -99,6 +109,11 @@ class ResearchTaskRepository:
             task.completion_tokens = usage.get("completion_tokens", 0)
             task.total_tokens = usage.get("total_tokens", 0)
         task.status = status
+        return await self._save(task)
+
+    async def save_scrape_report(self, task_id: uuid.UUID, report: list[dict]) -> ResearchTask:
+        task = await self._require(task_id)
+        task.scrape_report = report
         return await self._save(task)
 
     # --- internals ---

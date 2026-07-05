@@ -9,14 +9,30 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+MAX_URLS = 5
 
 
 class CreateResearchRequest(BaseModel):
     # user_id is NOT accepted from the client — it comes from the authenticated
     # principal (see api/deps.require_principal), which is what prevents IDOR.
     query: str = Field(..., min_length=1)
+    # user-supplied research material; validated fail-fast so a bad URL is a
+    # 422 now, not a scraper error a minute into the task.
+    urls: list[str] = Field(default_factory=list, max_length=MAX_URLS)
+    draft: str | None = Field(default=None, max_length=50_000)
+
+    @field_validator("urls")
+    @classmethod
+    def _urls_are_http(cls, v: list[str]) -> list[str]:
+        for u in v:
+            parsed = urlparse(u)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                raise ValueError(f"invalid url (must be http(s)://...): {u}")
+        return v
 
 
 class TaskView(BaseModel):
@@ -28,6 +44,9 @@ class TaskView(BaseModel):
     sub_questions: list = []
     final_report: str | None = None
     sources: list = []
+    urls: list = []
+    scrape_report: list | None = None
+    has_draft: bool = False
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -46,6 +65,9 @@ class TaskView(BaseModel):
             sub_questions=task.sub_questions or [],
             final_report=task.final_report,
             sources=task.sources or [],
+            urls=getattr(task, "source_urls", None) or [],
+            scrape_report=getattr(task, "scrape_report", None),
+            has_draft=bool(getattr(task, "draft_text", None)),
             prompt_tokens=getattr(task, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(task, "completion_tokens", 0) or 0,
             total_tokens=getattr(task, "total_tokens", 0) or 0,

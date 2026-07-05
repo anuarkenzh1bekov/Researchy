@@ -64,6 +64,11 @@ class ResearchTask(SQLModel, table=True):
     final_report: str | None = None
     sources: list = Field(default_factory=list, sa_column=Column(JSONB))
 
+    # user-supplied research material (web scraper + draft features)
+    source_urls: list | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    scrape_report: list | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    draft_text: str | None = None
+
     # Token usage summed across every LLM call in the pipeline (cost visibility).
     prompt_tokens: int = 0
     completion_tokens: int = 0

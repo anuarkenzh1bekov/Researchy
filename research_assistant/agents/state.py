@@ -52,6 +52,7 @@ class ResearchState(TypedDict, total=False):
     """Graph-wide state. `total=False` so nodes return partial updates."""
 
     query: str
+    user_draft: str          # user's own draft; planner/synthesizer build on it
     sub_questions: list[str]
     findings: Annotated[list[Finding], merge_findings]
     usage: Annotated[dict, merge_usage]  # accumulated token counts across all LLM calls

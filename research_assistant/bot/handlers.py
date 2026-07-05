@@ -13,6 +13,7 @@ aiogram is imported lazily inside build_router so importing this module is cheap
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 
 from research_assistant import reporting
@@ -23,6 +24,9 @@ log = get_logger(__name__)
 # Keep strong refs to in-flight render tasks so the loop doesn't GC them
 # mid-flight (asyncio holds only weak refs to bare create_task results).
 _RENDER_TASKS: set[asyncio.Task] = set()
+
+_URL_RE = re.compile(r"https?://[^\s<>()]+")
+_MAX_URLS = 5
 
 
 def _task_dict(task) -> dict:
@@ -36,6 +40,26 @@ def _task_dict(task) -> dict:
         "sources": task.sources or [],
         "total_tokens": task.total_tokens or 0,
     }
+
+
+def _scrape_summary(task) -> str | None:
+    """English per-URL outcome block, built by the BOT from the structured
+    scrape_report — the LLM never sees or paraphrases scrape errors. None when
+    there is nothing to warn about (no report, or everything ok)."""
+    report = getattr(task, "scrape_report", None) or []
+    if not report or all(r.get("status") == "ok" for r in report):
+        return None
+    ok = sum(1 for r in report if r.get("status") == "ok")
+    marks = {"ok": "✅", "partial": "⚠️", "failed": "❌"}
+    lines = [f"⚠️ Sources: {ok} of {len(report)} sites loaded."]
+    for r in report:
+        line = f"{marks.get(r.get('status'), '❓')} {r.get('url')}"
+        if r.get("status") == "ok":
+            line += f" — {r.get('pages_fetched', 0)} pages"
+        elif r.get("error"):
+            line += f" — {r['error']}"
+        lines.append(line)
+    return "\n".join(lines)
 
 
 # The three depth profiles, in the order shown as buttons. Kept here (not read
@@ -120,6 +144,53 @@ def build_router():
             "across the web and academic sources, then send back a report."
         )
 
+    @router.message(F.document)
+    async def on_document(message: Message) -> None:
+        """A draft file (txt/md/pdf/docx) with the research question as the
+        caption. Extraction runs NOW (fail-fast, same helper as API/CLI); the
+        depth chooser flow is then identical to a plain-text question."""
+        from research_assistant.ingest.drafts import (
+            MAX_FILE_BYTES,
+            DraftError,
+            extract_draft_text,
+        )
+        from research_assistant.storage.db import get_sessionmaker
+        from research_assistant.storage.models import SourceType
+        from research_assistant.storage.repository import ResearchTaskRepository
+
+        caption = (message.caption or "").strip()
+        if not caption:
+            await message.answer(
+                "Please resend the file with your research question as the caption."
+            )
+            return
+        doc = message.document
+        if doc.file_size and doc.file_size > MAX_FILE_BYTES:
+            await message.answer("⚠️ Draft rejected: file too large (over 10 MB).")
+            return
+        buf = await message.bot.download(doc)
+        try:
+            draft, truncated = extract_draft_text(doc.file_name or "", buf.read())
+        except DraftError as e:
+            await message.answer(f"⚠️ Draft rejected: {e}")
+            return
+
+        urls = _URL_RE.findall(caption)[:_MAX_URLS]
+        query = _URL_RE.sub("", caption).strip() or caption
+        user_id = f"telegram:{message.from_user.id}"
+        async with get_sessionmaker()() as session:
+            task = await ResearchTaskRepository(session).create(
+                user_id=user_id, query=query, source=SourceType.telegram,
+                urls=urls or None, draft=draft,
+            )
+        note = " (truncated to 50,000 characters)" if truncated else ""
+        await message.answer(
+            f"📎 Draft loaded{note} — the paper will build on it.\n"
+            "How deep should I go?\n"
+            "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
+            reply_markup=_depth_keyboard(task.id),
+        )
+
     @router.message(F.text)
     async def on_text(message: Message) -> None:
         """Persist the question as a pending task and ask which depth to run it
@@ -130,14 +201,19 @@ def build_router():
         from research_assistant.storage.repository import ResearchTaskRepository
 
         user_id = f"telegram:{message.from_user.id}"
-        query = message.text or ""
+        text = message.text or ""
+        urls = _URL_RE.findall(text)[:_MAX_URLS]
+        # strip the URLs out of the query so the planner sees a clean question
+        query = _URL_RE.sub("", text).strip() or text
 
         async with get_sessionmaker()() as session:
             task = await ResearchTaskRepository(session).create(
-                user_id=user_id, query=query, source=SourceType.telegram
+                user_id=user_id, query=query, source=SourceType.telegram,
+                urls=urls or None,
             )
+        note = f"🔗 {len(urls)} site(s) will be scraped as sources.\n" if urls else ""
         await message.answer(
-            "How deep should I go?\n"
+            f"{note}How deep should I go?\n"
             "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
             reply_markup=_depth_keyboard(task.id),
         )
@@ -281,6 +357,9 @@ async def _await_and_render(task_id: uuid.UUID, placeholder, fmt: str = "md") ->
                         "⚠️ Research finished but produced no report. Please try again."
                     )
                     return
+                warning = _scrape_summary(task)
+                if warning:
+                    await placeholder.answer(warning)
                 # Send the full report as a file, not a truncated message: Telegram
                 # caps a text message at 4096 chars, which silently cut the tail off
                 # any real report. Render in the chosen format, but if that format's

@@ -65,6 +65,17 @@ LLM + tool keys - no Postgres, Redis, or Celery - for quick trials and evaluatio
 on **faithfulness** (are claims grounded in cited sources?) and **coverage** (does it
 answer the question?).
 
+**9. Bring your own sources.** Attach up to 5 website URLs to a question - each is scraped
+(httpx + trafilatura, depth-1 same-domain crawl, BM25 chunk ranking) and joins the tool
+pool; every URL gets a user-visible `ok / partial / failed` outcome with a plain-English
+reason. JS-heavy sites use an optional Playwright fallback
+(`pip install -e ".[scraper]" && playwright install chromium`); without it they degrade
+with `page requires JS rendering, browser unavailable`.
+
+**10. Build on your draft.** Upload a draft (txt/md/pdf/docx) and the pipeline treats it
+as the paper's foundation: the Planner aims sub-questions at its gaps, the Synthesizer
+preserves its structure and voice while integrating the cited findings.
+
 ## 🧭 Architecture
 
 ```
@@ -171,6 +182,7 @@ server internals imported) - which is the point: one backend, many frontends.
 research login --key $KEY          # save API url + key to ~/.researchy/config.json
 research                           # interactive REPL
 research ask "how does pgvector affect RAG latency?"   # one-shot, live-streamed
+research ask "extend my survey" --draft draft.md --url https://site.test/docs  # your sources
 research history                   # your past tasks
 research show <id>                 # a task's report
 research bot connect <bot_token>   # attach a Telegram bot via the same API
@@ -188,6 +200,15 @@ In the REPL a follow-up line
 (`and his trophies?`, `why?`) is folded into the previous question so the pipeline keeps
 the subject; `new` clears the running topic. Config can also come from `RESEARCHY_API_URL` /
 `RESEARCHY_API_KEY` (CI-friendly).
+
+`--url` (repeatable, max 5) adds your own websites as research sources and `--draft FILE`
+(txt/md/pdf/docx) makes the paper build on your draft — both work with and without
+`--local`. After the run a warnings block shows each site's outcome
+(`✓ ok — 8 pages / ⚠ partial / ✗ failed — site returned 403 (access denied)`). The same
+fields ride on `POST /research` (`urls`, `draft`), the per-URL outcomes in
+`TaskView.scrape_report`, and `POST /research/draft-extract` converts an uploaded pdf/docx
+to plain text for any client. In Telegram, paste URLs inside the question text, or send a
+draft as a document with the question as its caption.
 
 On Windows you can skip `pip install` and use the `research.cmd` wrapper in the repo root
 (`research ask "..."`); it forwards to `python -m research_assistant.cli`.

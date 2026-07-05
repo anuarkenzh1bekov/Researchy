@@ -11,7 +11,7 @@ import json
 import uuid
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -48,13 +48,35 @@ async def create_research(
     session: AsyncSession = Depends(get_session),
 ) -> TaskView:
     task = await ResearchTaskRepository(session).create(
-        user_id=principal, query=body.query, source=SourceType.web
+        user_id=principal,
+        query=body.query,
+        source=SourceType.web,
+        urls=body.urls or None,
+        draft=body.draft,
     )
     # enqueue out-of-band; import here keeps Celery off the API import path.
     from research_assistant.tasks import run_research_task
 
     run_research_task.delay(str(task.id))
     return TaskView.from_task(task)
+
+
+@router.post("/draft-extract")
+async def draft_extract(
+    file: UploadFile,
+    principal: str = Depends(require_principal),
+) -> dict:
+    """Convert an uploaded draft (txt/md/pdf/docx) to plain text so any client
+    can then pass it as CreateResearchRequest.draft. Fail-fast: every problem
+    is a synchronous 422 with an English reason."""
+    from research_assistant.ingest.drafts import DraftError, extract_draft_text
+
+    data = await file.read()
+    try:
+        text, truncated = extract_draft_text(file.filename or "", data)
+    except DraftError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return {"text": text, "truncated": truncated}
 
 
 @router.get("/history", response_model=list[TaskView])

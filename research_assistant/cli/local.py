@@ -19,7 +19,7 @@ from research_assistant.agents.profiles import DepthProfile, get_profile
 from research_assistant.llm.factory import config_from_settings, get_provider
 from research_assistant.tools import get_tools
 
-_MARK = {"completed": "✓", "degraded": "⚠", "failed": "✗"}
+_MARK = {"completed": "✓", "degraded": "⚠", "failed": "✗", "done": "✓", "url_failed": "✗"}
 
 
 async def _progress(agent: str, event_type: str, payload: dict) -> None:
@@ -28,25 +28,49 @@ async def _progress(agent: str, event_type: str, payload: dict) -> None:
     mark = _MARK.get(event_type)
     if mark is None:
         return  # ignore "started"; only show terminal-per-stage marks
-    detail = payload.get("sub_question") or payload.get("error") or ""
+    detail = (
+        payload.get("sub_question")
+        or payload.get("error")
+        or payload.get("reason")
+        or (f"{payload.get('pages')} pages, {payload.get('chunks')} chunks"
+            if "chunks" in payload else "")
+        or ""
+    )
     print(f"  {mark} {agent} {detail}".rstrip())
 
 
-async def _run(query: str, profile: DepthProfile) -> dict:
+async def _run(
+    query: str,
+    profile: DepthProfile,
+    urls: list[str] | None = None,
+    draft: str | None = None,
+) -> tuple[dict, list | None]:
     config = config_from_settings()
+    tools = get_tools()
+    scrape_report: list | None = None
+    if urls:
+        from research_assistant.tools.web_scraper import UserSourcesTool
+
+        scraper = UserSourcesTool(urls)
+        scrape_report = await scraper.prepare(_progress)
+        if any(r["status"] != "failed" for r in scrape_report):
+            tools = [*tools, scraper]
     graph = build_graph(
         provider=get_provider(config),
-        tools=get_tools(),
+        tools=tools,
         publish=_progress,
         max_revisions=profile.max_revisions,
         config=config,
         target_subquestions=profile.sub_questions,
         max_results=profile.max_results,
     )
-    return await graph.ainvoke({"query": query})
+    inputs: dict = {"query": query}
+    if draft:
+        inputs["user_draft"] = draft
+    return await graph.ainvoke(inputs), scrape_report
 
 
-def _shape(query: str, final: dict) -> dict:
+def _shape(query: str, final: dict, scrape_report: list | None = None) -> dict:
     """Project the graph's final state into the task-shaped dict that
     render.render_report / _save_report (and the Telegram template) understand."""
     usage = final.get("usage") or {}
@@ -56,20 +80,33 @@ def _shape(query: str, final: dict) -> dict:
         "final_report": final.get("final_report", ""),
         "sources": final.get("sources", []),
         "sub_questions": final.get("sub_questions", []),
+        "scrape_report": scrape_report,
         "total_tokens": usage.get("total_tokens", 0),
     }
 
 
-def run_local(query: str, depth: str | None = None) -> dict:
+def run_local(
+    query: str,
+    depth: str | None = None,
+    urls: list[str] | None = None,
+    draft: str | None = None,
+) -> dict:
     """Run the pipeline in-process and return a task-shaped dict that
     render.render_report / _save_report already understand."""
     profile = get_profile(depth)
     print(f"running locally · depth={profile.name}")
-    return _shape(query, asyncio.run(_run(query, profile)))
+    final, report = asyncio.run(_run(query, profile, urls, draft))
+    return _shape(query, final, report)
 
 
-async def run_local_async(query: str, depth: str | None = None) -> dict:
+async def run_local_async(
+    query: str,
+    depth: str | None = None,
+    urls: list[str] | None = None,
+    draft: str | None = None,
+) -> dict:
     """Async sibling of run_local for callers already inside an event loop
     (e.g. the standalone Telegram bot's aiogram handlers, which can't call
     asyncio.run). Same in-process pipeline, same task-shaped result."""
-    return _shape(query, await _run(query, get_profile(depth)))
+    final, report = await _run(query, get_profile(depth), urls, draft)
+    return _shape(query, final, report)

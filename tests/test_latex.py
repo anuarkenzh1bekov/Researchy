@@ -90,6 +90,16 @@ def test_bib_entry_long_web_title_shortened_in_author_slot():
     assert "title = {{Prompt Caching in 2026: Cut LLM Costs, Keep Quality and Speed}}" in entry
 
 
+def test_bib_entry_user_source_uses_misc_fallback():
+    """User-scraped sources (source_type='user', no authors/year) must render
+    like web sources: @misc, title-as-author, n.d. — never crash."""
+    entry = bib_entry(1, {"title": "Site Page", "url": "https://s.test/p",
+                          "source_type": "user"})
+    assert entry.startswith("@misc")
+    assert "n.d." in entry
+    assert "Site Page" in entry
+
+
 def test_bib_entry_web_falls_back_to_title_author_and_nd():
     entry = bib_entry(1, WEB_SRC)
     assert entry.startswith("@misc{src1,")
