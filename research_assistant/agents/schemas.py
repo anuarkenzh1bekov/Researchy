@@ -15,3 +15,7 @@ class PlannerOutput(BaseModel):
 class CriticOutput(BaseModel):
     approved: bool
     gaps: list[str] = Field(default_factory=list)
+    # one-line reason per gap (parallel to `gaps`) — handed to the re-run
+    # Researcher so the retry addresses the actual weakness. Optional: a model
+    # that omits it (or under-fills) still parses; the router pads with None.
+    gap_reasons: list[str] = Field(default_factory=list)

@@ -22,7 +22,8 @@ jobs:
           cache: pip
 
       - name: Install
-        run: pip install -e ".[dev]"
+        # export extra included so the docx/pdf reporting tests run instead of skipping
+        run: pip install -e ".[dev,export]"
 
       - name: Lint (ruff)
         run: ruff check .

@@ -39,8 +39,9 @@ def _planner_messages(query: str, n: int = 4) -> list[Message]:
                 "You are the Planner in a multi-agent pipeline that produces an "
                 "academic-style research paper. Break the question into about "
                 f"{n} sub-questions that together fully cover it (use fewer if the "
-                "topic is narrow, more if it's broad). Each becomes one body "
-                "section of the paper, so plan them like a paper outline:\n"
+                f"topic is narrow, at most {n + 2} if it's broad — each one costs a "
+                "full research pass). Each becomes one body section of the paper, "
+                "so plan them like a paper outline:\n"
                 "- Each targets a DISTINCT facet: no overlap, don't restate the goal.\n"
                 "- Make each self-contained — name the subject explicitly ('Ronaldo's "
                 "trophies', not 'his trophies') so it can be researched on its own.\n"
@@ -50,17 +51,36 @@ def _planner_messages(query: str, n: int = 4) -> list[Message]:
                 "limitations, trade-offs or open problems.\n"
                 "- Favour open questions answerable from web and academic sources; "
                 "avoid yes/no.\n"
-                'Reply with ONLY JSON: {"sub_questions": ["...", "..."]}.'
+                "- Write the sub-questions in the language of the goal question — "
+                "they double as search queries and section briefs.\n"
+                'Reply with ONLY JSON: {"sub_questions": ["...", "..."]}.\n'
+                'Example — "How do lithium-ion batteries degrade?" -> '
+                '{"sub_questions": ["What is the electrochemical structure of a '
+                'lithium-ion cell?", "What chemical mechanisms cause capacity fade '
+                'in lithium-ion batteries?", "What operating conditions accelerate '
+                'lithium-ion battery degradation?", "What are the open problems in '
+                'preventing lithium-ion battery degradation?"]}'
             ),
         ),
         Message(role="user", content=query),
     ]
 
 
-def _researcher_messages(query: str, sub_question: str, results: list[ToolResult]) -> list[Message]:
+def _researcher_messages(
+    query: str,
+    sub_question: str,
+    results: list[ToolResult],
+    feedback: str | None = None,
+) -> list[Message]:
     sources = "\n\n".join(
         f"[{i + 1}] {r.title} ({r.url})\n{r.snippet}" for i, r in enumerate(results)
     ) or "(no sources found)"
+    retry_note = (
+        f"\n\nA reviewer judged the previous answer to this sub-question weak: "
+        f"{feedback}\nAddress that weakness directly in your answer."
+        if feedback
+        else ""
+    )
     return [
         Message(
             role="system",
@@ -77,10 +97,17 @@ def _researcher_messages(query: str, sub_question: str, results: list[ToolResult
                 "- Extract specifics — names, numbers, dates, methods, results — "
                 "not vague summaries; explain nuances rather than glossing over them.\n"
                 "- If the sources are thin, conflicting, or don't answer it, say so "
-                "plainly instead of guessing or filling the gap.\n"
+                "plainly instead of guessing or filling the gap. If no sources are "
+                "provided at all, reply with one short paragraph stating that no "
+                "evidence was found for this sub-question — do not answer from "
+                "memory.\n"
+                "- Aim for roughly 150-400 words: enough to develop the specifics, "
+                "no padding.\n"
                 "- Write formal, neutral prose paragraphs (occasional '- ' bullets "
                 "are fine) with NO headings — your text is merged into a larger "
                 "paper whose structure is added later.\n"
+                "- Write in the language of the goal question, whatever language "
+                "the sources are in; keep technical terms and names as-is.\n"
                 "- Write any math in plain text (e.g. O(t*d^2), QK^T/sqrt(d_k)); "
                 "never LaTeX markup like \\( \\frac \\text — the renderers print "
                 "it literally as garbage."
@@ -90,14 +117,24 @@ def _researcher_messages(query: str, sub_question: str, results: list[ToolResult
             role="user",
             content=(
                 f"Overall research goal: {query}\n"
-                f"Sub-question: {sub_question}\n\nSources:\n{sources}"
+                f"Sub-question: {sub_question}{retry_note}\n\nSources:\n{sources}"
             ),
         ),
     ]
 
 
 def _critic_messages(query: str, findings: list[Finding]) -> list[Message]:
-    body = "\n\n".join(f"### {f['sub_question']}\n{f['answer']}" for f in findings)
+    def _cites(f: Finding) -> str:
+        return "; ".join(
+            f"[{i + 1}] {s.get('title', '')} ({s.get('url', '')}, "
+            f"{s.get('source_type', 'web')})"
+            for i, s in enumerate(f.get("sources", []))
+        ) or "(none)"
+
+    body = "\n\n".join(
+        f"### {f['sub_question']}\n{f['answer']}\nCited sources: {_cites(f)}"
+        for f in findings
+    )
     return [
         Message(
             role="system",
@@ -105,15 +142,27 @@ def _critic_messages(query: str, findings: list[Finding]) -> list[Message]:
                 "You are the Critic holding the findings to an academic-paper "
                 "standard. Review them together for: facets of the goal left "
                 "unanswered; contradictions left unresolved; uncited or unsupported "
-                "claims; and important claims resting on a single thin source. "
+                "claims; and important claims resting on a single thin source — "
+                "each finding's 'Cited sources:' line shows what its [n] marks "
+                "point to; judge source quality and thinness from it. "
                 "Reply with ONLY JSON: "
-                '{"approved": bool, "gaps": ["<exact sub-question to redo>", ...]}. '
-                "Each gap MUST be copied VERBATIM from one of the '### ...' "
-                "sub-question headings below — pick the ones whose findings are "
-                "weakest and need re-researching. The exact text is required so the "
-                "re-run REPLACES that finding instead of adding a duplicate; a "
-                "paraphrase silently leaves the weak answer in the report. "
-                "Approve when the findings adequately answer the goal."
+                '{"approved": bool, "gaps": ["<sub-question>", ...], '
+                '"gap_reasons": ["<one line: why that finding is weak>", ...]}. '
+                "Each gap is one of:\n"
+                "- a '### ' heading copied VERBATIM — the re-run REPLACES that "
+                "finding; a paraphrased heading silently leaves the weak answer in "
+                "the report and adds a duplicate;\n"
+                "- a NEW self-contained sub-question covering a facet of the goal "
+                "no finding addresses — it is researched and ADDED as a section.\n"
+                "Flag at most 3 gaps — the most damaging ones. "
+                "gap_reasons runs parallel to gaps (same order, same length) and is "
+                "handed to the researcher working that sub-question — make it "
+                "actionable. Approve when the findings adequately answer the goal.\n"
+                'Example: {"approved": false, "gaps": ["What safety risks do '
+                'sodium-ion batteries pose?", "How do sodium-ion and lithium-ion '
+                'batteries compare on cost?"], "gap_reasons": ["single blog source, '
+                'no incident data or numbers", "cost facet of the goal missing from '
+                'the findings"]}'
             ),
         ),
         Message(role="user", content=f"Goal: {query}\n\nFindings:\n{body}"),
@@ -147,6 +196,8 @@ def _synthesizer_messages(
                 "- Headings: '## ' for sections, '### ' for subsections only; never "
                 "a single '# ' title (the renderers add the title page). Do not "
                 "number headings — the document class numbers them itself.\n"
+                "- Write in the language of the goal question, whatever language "
+                "the findings quote; keep technical terms and names as-is.\n"
                 "- Formal, neutral academic register, third person; flowing prose "
                 "paragraphs with topic sentences and transitions between sections — "
                 "not bullet-point inventories. Use '- ' bullets only for genuinely "
@@ -155,6 +206,9 @@ def _synthesizer_messages(
                 "paragraphs, covering every relevant detail the findings support "
                 "(specifics, numbers, context, caveats) rather than summarising "
                 "briefly. Do not omit supporting detail for the sake of brevity.\n"
+                "- Findings may overlap or repeat material (some were "
+                "re-researched); present each fact once, in the section where it "
+                "fits best, instead of echoing the duplication.\n"
                 "- Use only facts present in the findings; invent nothing.\n"
                 "- Write any math in plain text (e.g. O(t*d^2)); never LaTeX "
                 "markup like \\( \\frac \\text — the renderers print it literally.\n"
@@ -289,7 +343,8 @@ async def researcher_node(
     try:
         results = await _gather_sources(tools, sq, topic=inp["query"], max_results=max_results)
         resp = await provider.complete(
-            _researcher_messages(inp["query"], sq, results), config=llm_config
+            _researcher_messages(inp["query"], sq, results, feedback=inp.get("feedback")),
+            config=llm_config,
         )
         usage = _usage(resp)
         finding: Finding = {
@@ -330,11 +385,19 @@ async def critic_node(
         result = {
             "approved": out.approved,
             "gaps": out.gaps,
+            "gap_reasons": out.gap_reasons,
             "revision": state.get("revision", 0) + 1,
             "usage": usage,
         }
         await publish(
-            "critic", "completed", {"approved": out.approved, "gaps": out.gaps, "usage": usage}
+            "critic",
+            "completed",
+            {
+                "approved": out.approved,
+                "gaps": out.gaps,
+                "gap_reasons": out.gap_reasons,
+                "usage": usage,
+            },
         )
         return result
     except Exception as e:
@@ -396,12 +459,18 @@ def _snap_to_subquestion(gap: str, sub_questions: list[str]) -> str:
 
 def route_after_critic(state: ResearchState, *, max_revisions: int) -> str | list[Send]:
     """Critic's verdict -> next hop. Approved or out of revisions -> synthesize.
-    Otherwise re-research ONLY the flagged gap sub-questions (fan-out again)."""
+    Otherwise re-research ONLY the flagged gap sub-questions (fan-out again),
+    each carrying the Critic's reason so the retry targets the weakness."""
     if state.get("approved") or state.get("revision", 0) >= max_revisions:
         return "synthesizer"
     query = state["query"]
     subs = state.get("sub_questions", [])
-    return [
-        Send("researcher", {"query": query, "sub_question": _snap_to_subquestion(gap, subs)})
-        for gap in state.get("gaps", [])
-    ]
+    gaps = state.get("gaps", [])
+    reasons = state.get("gap_reasons") or []
+    sends = []
+    for i, gap in enumerate(gaps):
+        payload = {"query": query, "sub_question": _snap_to_subquestion(gap, subs)}
+        if i < len(reasons) and reasons[i]:
+            payload["feedback"] = reasons[i]
+        sends.append(Send("researcher", payload))
+    return sends

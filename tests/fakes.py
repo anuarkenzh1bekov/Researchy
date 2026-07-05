@@ -27,8 +27,11 @@ class FakeProvider:
 
 class RoutingFakeProvider:
     """LLMProvider that picks a canned reply by matching a marker substring in
-    the prompt (each agent's system prompt names its role). Order-independent —
-    works under parallel fan-out, unlike a queue."""
+    the prompt's ROLE DECLARATION — the opening of the system message ("You are
+    the Critic..."), not the whole prompt: agent prompts legitimately mention
+    OTHER roles in their bodies (the Critic explains what the researcher gets),
+    which would misroute a full-text match. Order-independent — works under
+    parallel fan-out, unlike a queue."""
 
     def __init__(self, by_marker: dict[str, str]) -> None:
         self._by = by_marker
@@ -37,7 +40,7 @@ class RoutingFakeProvider:
     async def complete(
         self, messages: list[Message], *, config: LLMProviderConfig
     ) -> LLMResponse:
-        text = " ".join(m.content for m in messages).lower()
+        text = messages[0].content[:80].lower()
         for marker, reply in self._by.items():
             if marker in text:
                 self.calls.append(marker)

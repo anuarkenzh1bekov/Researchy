@@ -7,7 +7,7 @@ pulling in llm/ or storage/.
 
 from __future__ import annotations
 
-from typing import Annotated, TypedDict
+from typing import Annotated, NotRequired, TypedDict
 
 
 class Finding(TypedDict):
@@ -57,6 +57,7 @@ class ResearchState(TypedDict, total=False):
     usage: Annotated[dict, merge_usage]  # accumulated token counts across all LLM calls
     approved: bool
     gaps: list[str]          # sub-questions the Critic flagged for re-research
+    gap_reasons: list[str]   # why each gap is weak (parallel to gaps; may be shorter)
     revision: int            # incremented each Critic->Researcher loop
     final_report: str
     sources: list[dict]      # flattened, deduped by the Synthesizer
@@ -67,6 +68,9 @@ class ResearcherInput(TypedDict):
 
     query: str
     sub_question: str
+    # Critic's one-line reason the previous answer was weak — present only on
+    # gap re-runs, so the retry targets the weakness instead of repeating itself.
+    feedback: NotRequired[str]
 
 
 if __name__ == "__main__":

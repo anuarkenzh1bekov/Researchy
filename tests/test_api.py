@@ -89,6 +89,16 @@ class FakePubSub:
 
 @pytest.fixture
 def client(monkeypatch):
+    # The SSE route opens its live Redis subscription BEFORE the replay (race
+    # fix), so every stream test would otherwise dial a real Redis — green on a
+    # dev box with the docker stack up, ConnectionError on CI. Fake it by
+    # default; tests that need specific live traffic override it again.
+    import research_assistant.events.subscriber as sub_mod
+
+    async def _fake_subscribe(task_id):
+        return FakePubSub()
+
+    monkeypatch.setattr(sub_mod, "subscribe", _fake_subscribe)
     monkeypatch.setattr(
         deps_mod, "get_settings", lambda: Settings(_env_file=None, api_auth_enabled=True)
     )
