@@ -1,5 +1,10 @@
-# Local infrastructure ONLY (Postgres+pgvector, Redis).
-# The app itself (API / Celery worker) runs on the host, not in compose.
+# Default (`docker compose up -d`): infrastructure only — Postgres+pgvector,
+# Redis — with the app (API / Celery worker) running on the host, which is the
+# main dev loop.
+#
+# `docker compose --profile app up -d --build` additionally builds and runs the
+# whole stack in containers: the API (migrates via Alembic, then serves on
+# :8000) and the worker. LLM/tool keys come from your .env.
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -26,6 +31,39 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  api:
+    profiles: [app]
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false # keys optional at build/boot; research runs need them
+    environment: &app-env
+      # in-network service names override any host-oriented URLs from .env
+      DATABASE_URL_ASYNC: postgresql+asyncpg://postgres:postgres@postgres:5432/research
+      DATABASE_URL_SYNC: postgresql://postgres:postgres@postgres:5432/research
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    profiles: [app]
+    build: .
+    command: celery -A research_assistant.tasks.celery_app worker --loglevel=info
+    env_file:
+      - path: .env
+        required: false
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   pgdata:

@@ -28,6 +28,9 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      - name: Type-check (mypy)
+        run: mypy
+
       - name: Test (pytest)
         # The suite uses fakes for the LLM/tools/DB/Redis, so no services needed.
         run: pytest -q
@@ -73,3 +76,59 @@ jobs:
 
       - name: Walk downgrades back to zero
         run: alembic downgrade base
+
+  e2e:
+    # Full-stack path the unit suite can't see: real Postgres + Redis, the real
+    # Celery task body (LangGraph + checkpointer + event bus), the real API and
+    # SSE replay — only the LLM/tools are faked (tests/test_e2e.py).
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: research
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d research"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Migrate to head
+        # e2e runs on the Alembic-owned schema, mirroring a real deploy
+        run: alembic upgrade head
+
+      - name: Test (e2e)
+        run: pytest -m e2e -q
+
+  docker:
+    # The image is the deploy artifact — a Dockerfile that no longer builds is
+    # a broken deliverable even when every test passes.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t researchy:ci .

@@ -39,6 +39,7 @@ async def main() -> None:
         assert pending is not None and pending.id == created.id
 
         appended = await repo.append_source_doc(created.id, {"title": "b.md", "text": "more"})
+        assert appended.source_docs is not None
         assert [d["title"] for d in appended.source_docs] == ["a.md", "b.md"]
 
     print("db round-trip OK")

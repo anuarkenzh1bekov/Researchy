@@ -11,7 +11,7 @@ import uuid
 from typing import Literal
 
 from sqlalchemy.exc import SQLAlchemyError
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from research_assistant.core.crypto import (
@@ -70,7 +70,7 @@ class ResearchTaskRepository:
             stmt = (
                 select(ResearchTask)
                 .where(ResearchTask.user_id == user_id)
-                .order_by(ResearchTask.created_at.desc())
+                .order_by(col(ResearchTask.created_at).desc())
                 .limit(limit)
             )
             result = await self._s.exec(stmt)
@@ -125,7 +125,7 @@ class ResearchTaskRepository:
                 select(ResearchTask)
                 .where(ResearchTask.user_id == user_id)
                 .where(ResearchTask.status == TaskStatus.pending)
-                .order_by(ResearchTask.created_at.desc())
+                .order_by(col(ResearchTask.created_at).desc())
                 .limit(1)
             )
             result = await self._s.exec(stmt)
@@ -204,7 +204,7 @@ class AgentEventRepository:
             stmt = (
                 select(AgentEvent)
                 .where(AgentEvent.task_id == task_id)
-                .order_by(AgentEvent.created_at.asc())
+                .order_by(col(AgentEvent.created_at).asc())
             )
             result = await self._s.exec(stmt)
             return list(result.all())

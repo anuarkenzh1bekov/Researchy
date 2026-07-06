@@ -5,6 +5,7 @@ defensively and re-ask once before failing.
 """
 
 import json
+from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -36,7 +37,10 @@ def _extract_json(text: str) -> str:
     return s[start : end + 1] if end >= start else s[start:]
 
 
-def _parse(content: str, schema: type[BaseModel]) -> BaseModel:
+T = TypeVar("T", bound=BaseModel)
+
+
+def _parse(content: str, schema: type[T]) -> T:
     return schema.model_validate(json.loads(_extract_json(content)))
 
 
@@ -58,8 +62,8 @@ async def complete_json(
     messages: list[Message],
     *,
     config: LLMProviderConfig,
-    schema: type[BaseModel],
-) -> tuple[BaseModel, dict]:
+    schema: type[T],
+) -> tuple[T, dict]:
     """Call the provider and parse/validate its reply as `schema`. On a
     parse/validation failure, re-ask ONCE with a strict-JSON hint; if that also
     fails, raise LLMProviderError.

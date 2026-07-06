@@ -276,7 +276,7 @@ async def _gather_sources(
     )
     results: list[ToolResult] = []
     for tool, outcome in zip(tools, outcomes, strict=True):
-        if isinstance(outcome, Exception):
+        if isinstance(outcome, BaseException):
             log.warning("tool_failed", tool=tool.name, error=str(outcome))
             continue
         results.extend(outcome)
@@ -391,7 +391,7 @@ async def researcher_node(
         # the SSE/bot subscribers (which would close the stream early).
         log.warning("researcher_degraded", sub_question=sq, error=str(e))
         await publish("researcher", "degraded", {"sub_question": sq, "error": str(e)})
-        finding: Finding = {
+        finding = {
             "sub_question": sq,
             "answer": f"_Research for this sub-question could not be completed: {e}_",
             "sources": [],
@@ -439,7 +439,7 @@ async def synthesizer_node(
     await publish("synthesizer", "started", {})
     try:
         sources, maps = _global_sources(state["findings"])
-        findings = [
+        findings: list[Finding] = [
             {**f, "answer": _renumber(f["answer"], maps[i])}
             for i, f in enumerate(state["findings"])
         ]

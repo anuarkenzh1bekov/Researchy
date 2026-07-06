@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import Any
 
 from research_assistant.core.exceptions import BotLifecycleError
 from research_assistant.core.logging import get_logger
@@ -27,7 +28,7 @@ log = get_logger(__name__)
 class BotManager:
     def __init__(self) -> None:
         self._tasks: dict[str, asyncio.Task] = {}
-        self._bots: dict[str, object] = {}  # user_id -> aiogram.Bot
+        self._bots: dict[str, Any] = {}  # user_id -> aiogram.Bot
 
     async def start(self, user_id: str, token: str) -> str:
         """Validate the token and begin polling in the background.

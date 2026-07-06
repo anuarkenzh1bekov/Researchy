@@ -71,6 +71,7 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "ruff>=0.6",
+    "mypy>=1.11",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -88,7 +89,22 @@ select = ["E", "F", "I", "UP", "B"]
 # B008 (no function calls in arg defaults) is a false positive for it.
 "research_assistant/api/*" = ["B008"]
 
+[tool.mypy]
+# 3.12, not the 3.11 floor: numpy (transitive, via rank_bm25) ships stubs with
+# 3.12+ `type` statements that a 3.11-target parse rejects outright.
+python_version = "3.12"
+files = ["research_assistant"]
+# Several runtime deps ship no py.typed / stubs (feedparser, tavily, fpdf,
+# trafilatura, rank_bm25, ...); their imports resolve to Any rather than erroring.
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
+# e2e needs live Postgres + Redis (docker compose up -d); everything else is
+# service-free and stays the default fast suite. Run e2e with: pytest -m e2e
+addopts = "-m 'not e2e'"
+markers = [
+    "e2e: full-stack test against live Postgres + Redis (deselected by default)",
+]

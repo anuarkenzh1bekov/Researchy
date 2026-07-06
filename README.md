@@ -157,6 +157,14 @@ python -m research_assistant.scripts.issue_api_key u1
 #   (or set API_AUTH_ENABLED=false in .env to run open for quick curls)
 ```
 
+Or skip the host setup entirely and run the whole stack in containers - one image
+serves both roles (API and worker), and the API migrates the schema on boot:
+
+```bash
+docker compose --profile app up -d --build    # API on :8000 + worker + infra
+docker compose exec api python -m research_assistant.scripts.issue_api_key u1
+```
+
 Then drive it over HTTP:
 
 ```bash
@@ -263,6 +271,16 @@ python -m research_assistant.eval
 ```
 
 Add cases in `research_assistant/eval/cases.py`.
+
+## ✅ CI
+
+Four jobs on every push: **lint + types + unit suite** (ruff, mypy, and a
+service-free pytest run - all LLM/tools/DB/Redis are fakes, so it finishes in
+seconds), **migrations** (every Alembic migration up against a real pgvector
+database, a repository round-trip, then every downgrade back to zero), **e2e**
+(real Postgres + Redis + the actual Celery task body - LangGraph checkpointer,
+event bus, SSE replay - with only the LLM and search tools faked), and a
+**Docker image build** (the deploy artifact must always build).
 
 ## ⚡ Performance
 

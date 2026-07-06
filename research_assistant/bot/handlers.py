@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+from typing import Literal, cast
 
 from research_assistant import reporting
 from research_assistant.core.logging import get_logger
@@ -189,10 +190,16 @@ def build_router():
 
         caption = (message.caption or "").strip()
         doc = message.document
+        # aiogram guarantees these under F.document; the guard narrows its Optionals.
+        if doc is None or message.bot is None or message.from_user is None:
+            return
         if doc.file_size and doc.file_size > MAX_FILE_BYTES:
             await message.answer("⚠️ Draft rejected: file too large (over 10 MB).")
             return
         buf = await message.bot.download(doc)
+        if buf is None:
+            await message.answer("⚠️ Could not download the file — please resend it.")
+            return
         try:
             text, truncated = extract_draft_text(doc.file_name or "", buf.read())
         except DraftError as e:
@@ -217,7 +224,7 @@ def build_router():
                     pending.id, {"title": filename, "text": text}
                 )
             await message.answer(
-                f"📚 Added as source material ({len(task.source_docs)} total)."
+                f"📚 Added as source material ({len(task.source_docs or [])} total)."
             )
             return
 
@@ -246,6 +253,8 @@ def build_router():
         from research_assistant.storage.models import SourceType
         from research_assistant.storage.repository import ResearchTaskRepository
 
+        if message.from_user is None:  # never None for a user text message
+            return
         user_id = f"telegram:{message.from_user.id}"
         text = message.text or ""
         urls = _URL_RE.findall(text)[:_MAX_URLS]
@@ -322,7 +331,9 @@ def build_router():
             if task.status != TaskStatus.pending:
                 await callback.answer("Already running — hang tight.")
                 return
-            await repo.resolve_document_role(task_id, keep=keep)
+            await repo.resolve_document_role(
+                task_id, keep=cast("Literal['draft', 'source']", keep)
+            )
 
         label = (
             "the paper will build on it"

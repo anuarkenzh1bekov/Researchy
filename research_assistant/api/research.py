@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
@@ -129,7 +130,7 @@ async def stream_research(
             seen: set[str] = set()
             replayed = await AgentEventRepository(session).list_by_task(task_id)
             for e in replayed:
-                event = {
+                event: dict[str, Any] = {
                     "event_id": str(e.id),
                     "created_at": e.created_at.isoformat(),
                     "task_id": str(task_id),

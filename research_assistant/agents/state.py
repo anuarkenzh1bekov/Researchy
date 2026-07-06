@@ -76,9 +76,9 @@ class ResearcherInput(TypedDict):
 
 if __name__ == "__main__":
     # ponytail: self-check for the one piece of non-trivial logic here.
-    a = [{"sub_question": "q1", "answer": "old", "sources": []}]
-    b = [{"sub_question": "q2", "answer": "new", "sources": []}]
-    c = [{"sub_question": "q1", "answer": "fresh", "sources": []}]
+    a: list[Finding] = [{"sub_question": "q1", "answer": "old", "sources": []}]
+    b: list[Finding] = [{"sub_question": "q2", "answer": "new", "sources": []}]
+    c: list[Finding] = [{"sub_question": "q1", "answer": "fresh", "sources": []}]
 
     m = merge_findings(a, b)
     assert [f["sub_question"] for f in m] == ["q1", "q2"], m

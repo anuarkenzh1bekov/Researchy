@@ -186,7 +186,7 @@ def prompt() -> str:
         try:
             import msvcrt
         except ImportError:
-            msvcrt = None
+            msvcrt = None  # type: ignore[assignment]
         if msvcrt is not None:
             try:
                 return _animated_prompt(msvcrt)
@@ -375,7 +375,7 @@ def run_progress(events: Iterator[dict]) -> dict | None:
         )
         tok = f" · {_fmt_tokens(tokens)} tokens" if tokens else ""
         if done:
-            foot = Text(f"done · {elapsed:.0f}s{tok}", style="dim")
+            foot: Text | Table = Text(f"done · {elapsed:.0f}s{tok}", style="dim")
         else:
             word = _PROCESS_WORDS[(word0 + int(elapsed / 3.0)) % len(_PROCESS_WORDS)]
             line = Table.grid(padding=(0, 1))
