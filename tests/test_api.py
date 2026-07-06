@@ -56,8 +56,12 @@ class FakeTaskRepo:
     async def get(self, task_id):
         return self.tasks.get(task_id)
 
-    async def list_by_user(self, user_id, *, limit=50):
-        return [t for t in self.tasks.values() if t.user_id == user_id]
+    async def list_by_user(self, user_id, *, limit=50, before=None):
+        tasks = [t for t in self.tasks.values() if t.user_id == user_id]
+        if before is not None:
+            tasks = [t for t in tasks if t.created_at < before]
+        tasks.sort(key=lambda t: t.created_at, reverse=True)
+        return tasks[:limit]
 
     async def update_status(self, task_id, status, *, error_message=None):
         task = self.tasks[task_id]
@@ -274,6 +278,59 @@ async def test_stream_subscribes_before_replay_and_dedupes(client, monkeypatch):
     ids = [f["event_id"] for f in frames]
     assert len(ids) == len(set(ids)), f"duplicate events sent: {ids}"
     assert [f["agent_name"] for f in frames] == ["planner", "synthesizer"]
+
+
+# --- history pagination ------------------------------------------------------------
+
+
+async def _seed_aged(age_seconds: int, **kw) -> ResearchTask:
+    """Seed a task created `age_seconds` ago (fresh enough to dodge the
+    pending-timeout expiry, which only fires past 300s)."""
+    task = await _seed_task()
+    task.created_at = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    for k, v in kw.items():
+        setattr(task, k, v)
+    return task
+
+
+async def test_history_newest_first_and_respects_limit(client):
+    old = await _seed_aged(30)
+    mid = await _seed_aged(20)
+    new = await _seed_aged(10)
+    r = await client.get("/research/history?limit=2", headers=_auth())
+    assert [t["id"] for t in r.json()] == [str(new.id), str(mid.id)]
+    assert str(old.id) not in r.text
+
+
+async def test_history_before_cursor_returns_older_page(client):
+    old = await _seed_aged(30)
+    mid = await _seed_aged(20)
+    await _seed_aged(10)
+    # params= so the cursor's "+00:00" offset is URL-encoded, not read as a space
+    cursor = mid.created_at.isoformat()
+    r = await client.get("/research/history", params={"before": cursor}, headers=_auth())
+    assert [t["id"] for t in r.json()] == [str(old.id)]
+
+
+async def test_history_rejects_bad_limit(client):
+    assert (await client.get("/research/history?limit=0", headers=_auth())).status_code == 422
+    assert (await client.get("/research/history?limit=999", headers=_auth())).status_code == 422
+
+
+async def test_history_items_are_slim(client):
+    """History is a listing — the heavy payload (final_report, sources) is
+    fetched per-task via GET /research/{id}, not shipped N times in a list."""
+    task = await _seed_task()
+    task.status = "done"
+    task.final_report = "# big report"
+    r = await client.get("/research/history", headers=_auth())
+    (item,) = r.json()
+    assert "final_report" not in item
+    assert "sources" not in item
+    assert item["has_report"] is True
+    assert item["id"] == str(task.id)
+    assert item["status"] == "done"
+    assert item["query"] == "q?"
 
 
 # --- pending timeout ---------------------------------------------------------------

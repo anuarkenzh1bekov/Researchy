@@ -8,6 +8,7 @@ directly). Each repo wraps a single AsyncSession passed in by the caller.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Literal
 
 from sqlalchemy import extract, func
@@ -66,7 +67,12 @@ class ResearchTaskRepository:
         except SQLAlchemyError as e:
             raise RepositoryError(f"get research task failed: {e}") from e
 
-    async def list_by_user(self, user_id: str, *, limit: int = 50) -> list[ResearchTask]:
+    async def list_by_user(
+        self, user_id: str, *, limit: int = 50, before: datetime | None = None
+    ) -> list[ResearchTask]:
+        """Newest-first page. `before` is the cursor: pass the last item's
+        created_at to get the next (older) page — stable under concurrent
+        inserts, and the created_at index carries the whole query."""
         try:
             stmt = (
                 select(ResearchTask)
@@ -74,6 +80,8 @@ class ResearchTaskRepository:
                 .order_by(col(ResearchTask.created_at).desc())
                 .limit(limit)
             )
+            if before is not None:
+                stmt = stmt.where(col(ResearchTask.created_at) < before)
             result = await self._s.exec(stmt)
             return list(result.all())
         except SQLAlchemyError as e:

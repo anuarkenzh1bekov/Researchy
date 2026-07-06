@@ -90,6 +90,38 @@ class TaskView(BaseModel):
         )
 
 
+class TaskSummaryView(BaseModel):
+    """One history-listing row. Deliberately excludes the heavy payload
+    (final_report, sources, sub_questions) — a page of N tasks must not ship
+    N full reports; clients fetch one via GET /research/{id} when opened."""
+
+    id: uuid.UUID
+    user_id: str
+    source: str
+    query: str
+    status: str
+    has_report: bool = False
+    total_tokens: int = 0
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_task(cls, task) -> TaskSummaryView:
+        return cls(
+            id=task.id,
+            user_id=task.user_id,
+            source=task.source.value if hasattr(task.source, "value") else task.source,
+            query=task.query,
+            status=task.status.value if hasattr(task.status, "value") else task.status,
+            has_report=bool(task.final_report),
+            total_tokens=getattr(task, "total_tokens", 0) or 0,
+            error_message=task.error_message,
+            created_at=task.created_at,
+            updated_at=task.updated_at,
+        )
+
+
 class BotConnectRequest(BaseModel):
     # user_id comes from the authenticated principal, not the body.
     bot_token: str = Field(..., min_length=1)

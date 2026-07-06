@@ -13,12 +13,12 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from research_assistant.api.deps import require_principal
-from research_assistant.api.schemas import CreateResearchRequest, TaskView
+from research_assistant.api.schemas import CreateResearchRequest, TaskSummaryView, TaskView
 from research_assistant.core.settings import get_settings
 from research_assistant.storage.db import get_session
 from research_assistant.storage.models import SourceType, TaskStatus
@@ -102,14 +102,17 @@ async def draft_extract(
     return {"text": text, "truncated": truncated}
 
 
-@router.get("/history", response_model=list[TaskView])
+@router.get("/history", response_model=list[TaskSummaryView])
 async def my_history(
     principal: str = Depends(require_principal),
     session: AsyncSession = Depends(get_session),
-) -> list[TaskView]:
+    limit: int = Query(default=50, ge=1, le=200),
+    # cursor: pass the last item's created_at to get the next (older) page
+    before: datetime | None = Query(default=None),
+) -> list[TaskSummaryView]:
     repo = ResearchTaskRepository(session)
-    tasks = await repo.list_by_user(principal)
-    return [TaskView.from_task(await _expire_if_stale(t, repo)) for t in tasks]
+    tasks = await repo.list_by_user(principal, limit=limit, before=before)
+    return [TaskSummaryView.from_task(await _expire_if_stale(t, repo)) for t in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskView)
