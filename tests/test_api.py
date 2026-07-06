@@ -44,10 +44,10 @@ class FakeTaskRepo:
     def __init__(self, session) -> None:
         pass
 
-    async def create(self, *, user_id, query, source, urls=None, draft=None):
+    async def create(self, *, user_id, query, source, urls=None, draft=None, source_docs=None):
         task = ResearchTask(
             user_id=user_id, query=query, source=source,
-            source_urls=urls, draft_text=draft,
+            source_urls=urls, draft_text=draft, source_docs=source_docs,
         )
         self.tasks[task.id] = task
         return task
@@ -310,3 +310,25 @@ async def test_draft_extract_requires_auth(client):
     files = {"file": ("d.txt", b"x", "text/plain")}
     r = await client.post("/research/draft-extract", files=files)
     assert r.status_code == 401
+
+
+# --- source docs -------------------------------------------------------------------
+
+
+async def test_create_with_source_docs(client):
+    body = {"query": "q", "source_docs": [{"title": "a.pdf", "text": "article text"}]}
+    r = await client.post("/research", json=body, headers=_auth())
+    assert r.status_code == 201
+    assert r.json()["has_source_docs"] is True
+
+
+async def test_create_source_doc_empty_text_422(client):
+    body = {"query": "q", "source_docs": [{"title": "a.pdf", "text": ""}]}
+    r = await client.post("/research", json=body, headers=_auth())
+    assert r.status_code == 422
+
+
+async def test_create_many_source_docs_ok(client):
+    docs = [{"title": f"d{i}.md", "text": f"text {i}"} for i in range(12)]
+    r = await client.post("/research", json={"query": "q", "source_docs": docs}, headers=_auth())
+    assert r.status_code == 201  # unlimited by design — no list-length cap

@@ -85,6 +85,7 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
         query = task.query
         urls = task.source_urls
         draft = task.draft_text
+        docs = task.source_docs
 
     # 2. wire dependencies (injected — agents import none of these)
     # Depth profile scales the three effort levers together (sub-questions,
@@ -97,14 +98,14 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
     tools = get_tools()
     publish = make_publisher(task_id)
 
-    # 2b. user-supplied sites: scrape eagerly BEFORE the graph (the parallel
-    # researcher fan-out would race a lazy first fetch), persist the per-URL
-    # report so clients can show what loaded and what failed, and only add the
-    # tool when at least one URL yielded content.
-    if urls:
+    # 2b. user-supplied sites + documents: prepare eagerly BEFORE the graph (the
+    # parallel researcher fan-out would race a lazy first fetch), persist the
+    # per-URL report so clients can show what loaded and what failed, and only
+    # add the tool when at least one URL yielded content.
+    if urls or docs:
         from research_assistant.tools.web_scraper import UserSourcesTool
 
-        scraper = UserSourcesTool(urls)
+        scraper = UserSourcesTool(urls or [], docs=docs)
         scrape_report = await scraper.prepare(publish)
         async with get_sessionmaker()() as session:
             await ResearchTaskRepository(session).save_scrape_report(task_id, scrape_report)

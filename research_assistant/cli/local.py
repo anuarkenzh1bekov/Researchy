@@ -44,14 +44,15 @@ async def _run(
     profile: DepthProfile,
     urls: list[str] | None = None,
     draft: str | None = None,
+    source_docs: list[dict] | None = None,
 ) -> tuple[dict, list | None]:
     config = config_from_settings()
     tools = get_tools()
     scrape_report: list | None = None
-    if urls:
+    if urls or source_docs:
         from research_assistant.tools.web_scraper import UserSourcesTool
 
-        scraper = UserSourcesTool(urls)
+        scraper = UserSourcesTool(urls or [], docs=source_docs)
         scrape_report = await scraper.prepare(_progress)
         if any(r["status"] != "failed" for r in scrape_report):
             tools = [*tools, scraper]
@@ -81,6 +82,8 @@ def _shape(query: str, final: dict, scrape_report: list | None = None) -> dict:
         "sources": final.get("sources", []),
         "sub_questions": final.get("sub_questions", []),
         "scrape_report": scrape_report,
+        "prompt_tokens": usage.get("prompt_tokens", 0),
+        "completion_tokens": usage.get("completion_tokens", 0),
         "total_tokens": usage.get("total_tokens", 0),
     }
 
@@ -90,12 +93,13 @@ def run_local(
     depth: str | None = None,
     urls: list[str] | None = None,
     draft: str | None = None,
+    source_docs: list[dict] | None = None,
 ) -> dict:
     """Run the pipeline in-process and return a task-shaped dict that
     render.render_report / _save_report already understand."""
     profile = get_profile(depth)
     print(f"running locally · depth={profile.name}")
-    final, report = asyncio.run(_run(query, profile, urls, draft))
+    final, report = asyncio.run(_run(query, profile, urls, draft, source_docs))
     return _shape(query, final, report)
 
 
@@ -104,9 +108,10 @@ async def run_local_async(
     depth: str | None = None,
     urls: list[str] | None = None,
     draft: str | None = None,
+    source_docs: list[dict] | None = None,
 ) -> dict:
     """Async sibling of run_local for callers already inside an event loop
     (e.g. the standalone Telegram bot's aiogram handlers, which can't call
     asyncio.run). Same in-process pipeline, same task-shaped result."""
-    final, report = await _run(query, get_profile(depth), urls, draft)
+    final, report = await _run(query, get_profile(depth), urls, draft, source_docs)
     return _shape(query, final, report)

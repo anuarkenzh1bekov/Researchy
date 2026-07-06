@@ -203,8 +203,9 @@ class _Chunk:
 
 
 class UserSourcesTool:
-    """ResearchTool over the user's own URLs. prepare() once (eager, before the
-    graph); search() ranks the chunk index with BM25 per sub-question.
+    """ResearchTool over the user's own URLs and uploaded documents. prepare()
+    once (eager, before the graph); search() ranks the shared chunk index with
+    BM25 per sub-question.
 
     render_js / check_url / transport are injectable for tests and degrade
     hooks — production callers pass none of them."""
@@ -215,12 +216,14 @@ class UserSourcesTool:
         self,
         urls: list[str],
         *,
+        docs: list[dict] | None = None,
         max_pages_per_url: int = MAX_PAGES_PER_URL,
         render_js=None,
         check_url=None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._urls = urls
+        self._docs = docs or []
         self._max_pages = max_pages_per_url
         self._render_js = render_js or _render_with_browser
         self._check_url = check_url or check_public_http
@@ -264,6 +267,35 @@ class UserSourcesTool:
         (the spec's UrlReport shape). Never raises."""
         await publish("scraper", "started", {"urls": list(self._urls)})
         reports: list[dict] = []
+        # Pre-extracted documents (spec: SourceDoc {title, text}) go straight
+        # into the shared chunk index. Extraction happened at the edges, so a
+        # doc here is already validated — the empty check is defensive only.
+        for doc in self._docs:
+            title = (doc.get("title") or "").strip() or "document"
+            text = (doc.get("text") or "").strip()
+            label = f"file:{title}"  # display label; chunks keep url="" for citations
+            report = {
+                "url": label,
+                "status": "failed",
+                "pages_fetched": 0,
+                "chunks": 0,
+                "used_browser": False,
+                "error": None,
+            }
+            if not text:
+                report["error"] = "document contains no text"
+                reports.append(report)
+                await publish(
+                    "scraper", "url_failed",
+                    {"url": label, "reason": report["error"]},
+                )
+                continue
+            n_before = len(self._chunks)
+            for chunk in chunk_text(text):
+                self._chunks.append(_Chunk(url="", title=title, text=chunk))
+            report["status"] = "ok"
+            report["chunks"] = len(self._chunks) - n_before
+            reports.append(report)
         async with httpx.AsyncClient(
             timeout=FETCH_TIMEOUT_S,
             follow_redirects=True,

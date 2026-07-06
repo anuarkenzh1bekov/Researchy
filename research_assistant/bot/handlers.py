@@ -101,6 +101,26 @@ def _rows(buttons, per_row: int = 3):
     return [buttons[i : i + per_row] for i in range(0, len(buttons), per_row)]
 
 
+def _role_keyboard(task_id):
+    """Draft-or-source choice for an uploaded document. The task id rides in
+    callback_data (stateless, same pattern as the depth chooser); the filename
+    does NOT fit there — see repository.resolve_document_role."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📝 My draft", callback_data=f"docrole:draft:{task_id}"
+                ),
+                InlineKeyboardButton(
+                    text="📚 Source material", callback_data=f"docrole:source:{task_id}"
+                ),
+            ]
+        ]
+    )
+
+
 def _run_keyboard(depth, task_id):
     """Second-step buttons: pick the output FORMAT for a chosen depth. The depth,
     format and task id all ride in callback_data so the tap can enqueue the run
@@ -146,9 +166,18 @@ def build_router():
 
     @router.message(F.document)
     async def on_document(message: Message) -> None:
-        """A draft file (txt/md/pdf/docx) with the research question as the
-        caption. Extraction runs NOW (fail-fast, same helper as API/CLI); the
-        depth chooser flow is then identical to a plain-text question."""
+        """A file upload, with two branches depending on whether it carries a
+        caption (research question):
+
+        - WITH a caption: creates a new task, storing the extracted text as
+          BOTH a draft and a source doc; the user then taps 📝/📚 to say which
+          one it is (see on_docrole / resolve_document_role), after which the
+          depth chooser flow is identical to a plain-text question.
+        - WITHOUT a caption: a FOLLOW-UP document, appended as a source to the
+          user's newest still-pending task (this is how "unlimited files"
+          works without in-memory session state).
+
+        Extraction runs NOW either way (fail-fast, same helper as API/CLI)."""
         from research_assistant.ingest.drafts import (
             MAX_FILE_BYTES,
             DraftError,
@@ -159,36 +188,53 @@ def build_router():
         from research_assistant.storage.repository import ResearchTaskRepository
 
         caption = (message.caption or "").strip()
-        if not caption:
-            await message.answer(
-                "Please resend the file with your research question as the caption."
-            )
-            return
         doc = message.document
         if doc.file_size and doc.file_size > MAX_FILE_BYTES:
             await message.answer("⚠️ Draft rejected: file too large (over 10 MB).")
             return
         buf = await message.bot.download(doc)
         try:
-            draft, truncated = extract_draft_text(doc.file_name or "", buf.read())
+            text, truncated = extract_draft_text(doc.file_name or "", buf.read())
         except DraftError as e:
-            await message.answer(f"⚠️ Draft rejected: {e}")
+            await message.answer(f"⚠️ File rejected: {e}")
+            return
+        user_id = f"telegram:{message.from_user.id}"
+        filename = doc.file_name or "document"
+
+        if not caption:
+            # No question attached: this is a FOLLOW-UP document — attach it as
+            # a source to the user's newest still-pending task (this is how
+            # "unlimited files" works without in-memory session state).
+            async with get_sessionmaker()() as session:
+                repo = ResearchTaskRepository(session)
+                pending = await repo.latest_pending_by_user(user_id)
+                if pending is None:
+                    await message.answer(
+                        "Please resend the file with your research question as the caption."
+                    )
+                    return
+                task = await repo.append_source_doc(
+                    pending.id, {"title": filename, "text": text}
+                )
+            await message.answer(
+                f"📚 Added as source material ({len(task.source_docs)} total)."
+            )
             return
 
         urls = _URL_RE.findall(caption)[:_MAX_URLS]
         query = _URL_RE.sub("", caption).strip() or caption
-        user_id = f"telegram:{message.from_user.id}"
+        # Stored as BOTH roles; the docrole button tap keeps one, nulls the other.
         async with get_sessionmaker()() as session:
             task = await ResearchTaskRepository(session).create(
                 user_id=user_id, query=query, source=SourceType.telegram,
-                urls=urls or None, draft=draft,
+                urls=urls or None, draft=text,
+                source_docs=[{"title": filename, "text": text}],
             )
         note = " (truncated to 50,000 characters)" if truncated else ""
         await message.answer(
-            f"📎 Draft loaded{note} — the paper will build on it.\n"
-            "How deep should I go?\n"
-            "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
-            reply_markup=_depth_keyboard(task.id),
+            f"📎 File received{note}. Is this your DRAFT to build on, "
+            "or SOURCE MATERIAL to cite?",
+            reply_markup=_role_keyboard(task.id),
         )
 
     @router.message(F.text)
@@ -246,6 +292,47 @@ def build_router():
         await callback.message.edit_text(
             f"Depth: {depth}. Which format should the report be?",
             reply_markup=_run_keyboard(depth, task_id),
+        )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("docrole:"))
+    async def on_docrole(callback) -> None:
+        """Draft-or-source tap: null the losing role, then the depth chooser —
+        from here the flow is identical to a plain text question."""
+        from research_assistant.storage.db import get_sessionmaker
+        from research_assistant.storage.models import TaskStatus
+        from research_assistant.storage.repository import ResearchTaskRepository
+
+        try:
+            _, keep, tid = (callback.data or "").split(":", 2)
+            task_id = uuid.UUID(tid)
+        except ValueError:
+            await callback.answer()
+            return
+        if keep not in ("draft", "source"):
+            await callback.answer()
+            return
+
+        async with get_sessionmaker()() as session:
+            repo = ResearchTaskRepository(session)
+            task = await repo.get(task_id)
+            if task is None:
+                await callback.answer("This question is no longer available.", show_alert=True)
+                return
+            if task.status != TaskStatus.pending:
+                await callback.answer("Already running — hang tight.")
+                return
+            await repo.resolve_document_role(task_id, keep=keep)
+
+        label = (
+            "the paper will build on it"
+            if keep == "draft"
+            else "it will be cited as a source"
+        )
+        await callback.message.edit_text(
+            f"📎 Got it — {label}.\nHow deep should I go?\n"
+            "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
+            reply_markup=_depth_keyboard(task_id),
         )
         await callback.answer()
 

@@ -16,6 +16,15 @@ from pydantic import BaseModel, Field, field_validator
 MAX_URLS = 5
 
 
+class SourceDocIn(BaseModel):
+    """A pre-extracted source document (spec: SourceDoc). Clients convert
+    files via POST /research/draft-extract; the title is the filename and
+    becomes the citation title."""
+
+    title: str = Field(..., min_length=1, max_length=300)
+    text: str = Field(..., min_length=1, max_length=50_000)
+
+
 class CreateResearchRequest(BaseModel):
     # user_id is NOT accepted from the client — it comes from the authenticated
     # principal (see api/deps.require_principal), which is what prevents IDOR.
@@ -24,6 +33,8 @@ class CreateResearchRequest(BaseModel):
     # 422 now, not a scraper error a minute into the task.
     urls: list[str] = Field(default_factory=list, max_length=MAX_URLS)
     draft: str | None = Field(default=None, max_length=50_000)
+    # unlimited by user decision; the 50k-per-doc cap is the practical bound
+    source_docs: list[SourceDocIn] = Field(default_factory=list)
 
     @field_validator("urls")
     @classmethod
@@ -47,6 +58,7 @@ class TaskView(BaseModel):
     urls: list = []
     scrape_report: list | None = None
     has_draft: bool = False
+    has_source_docs: bool = False
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -68,6 +80,7 @@ class TaskView(BaseModel):
             urls=getattr(task, "source_urls", None) or [],
             scrape_report=getattr(task, "scrape_report", None),
             has_draft=bool(getattr(task, "draft_text", None)),
+            has_source_docs=bool(getattr(task, "source_docs", None)),
             prompt_tokens=getattr(task, "prompt_tokens", 0) or 0,
             completion_tokens=getattr(task, "completion_tokens", 0) or 0,
             total_tokens=getattr(task, "total_tokens", 0) or 0,

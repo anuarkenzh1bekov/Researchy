@@ -70,7 +70,9 @@ answer the question?).
 pool; every URL gets a user-visible `ok / partial / failed` outcome with a plain-English
 reason. JS-heavy sites use an optional Playwright fallback
 (`pip install -e ".[scraper]" && playwright install chromium`); without it they degrade
-with `page requires JS rendering, browser unavailable`.
+with `page requires JS rendering, browser unavailable`. Files work too: attach articles
+via `--source-file` (CLI), `source_docs` (API), or the bot's "📚 Source material" button —
+they join the same chunk index and are cited APA-style as uploaded documents.
 
 **10. Build on your draft.** Upload a draft (txt/md/pdf/docx) and the pipeline treats it
 as the paper's foundation: the Planner aims sub-questions at its gaps, the Synthesizer
@@ -207,8 +209,11 @@ the subject; `new` clears the running topic. Config can also come from `RESEARCH
 (`✓ ok — 8 pages / ⚠ partial / ✗ failed — site returned 403 (access denied)`). The same
 fields ride on `POST /research` (`urls`, `draft`), the per-URL outcomes in
 `TaskView.scrape_report`, and `POST /research/draft-extract` converts an uploaded pdf/docx
-to plain text for any client. In Telegram, paste URLs inside the question text, or send a
-draft as a document with the question as its caption.
+to plain text for any client. `--source-file FILE` (repeatable, same formats) attaches an
+article the paper should *cite* — vs `--draft`, which it *builds on* — and rides on
+`POST /research` as `source_docs`. In Telegram, paste URLs inside the question text; a
+document sent with the question as its caption asks "📝 My draft / 📚 Source material",
+and extra documents sent while the task is still pending attach as sources automatically.
 
 On Windows you can skip `pip install` and use the `research.cmd` wrapper in the repo root
 (`research ask "..."`); it forwards to `python -m research_assistant.cli`.

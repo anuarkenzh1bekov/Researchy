@@ -89,7 +89,7 @@ def bib_entry(index: int, source: dict) -> str:
             fields = [f"author = {{{{{title}}}}}"]
         fields += [
             f"year = {{{year if year else 'n.d.'}}}",
-            f"howpublished = {{\\url{{{url}}}}}",
+            f"howpublished = {{\\url{{{url}}}}}" if url else "howpublished = {uploaded document}",
         ]
         kind = "misc"
     body = ",\n  ".join(fields)

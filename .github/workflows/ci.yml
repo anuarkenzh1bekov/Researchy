@@ -31,3 +31,45 @@ jobs:
       - name: Test (pytest)
         # The suite uses fakes for the LLM/tools/DB/Redis, so no services needed.
         run: pytest -q
+
+  migrations:
+    # The unit suite never touches Postgres, so this job is what catches
+    # model/migration drift: run every Alembic migration against a real
+    # pgvector database, do one repository round-trip on the migrated
+    # schema, then walk the downgrades back to zero.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16  # baseline migration does CREATE EXTENSION vector
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: research
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U postgres -d research"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e .
+
+      # Settings default to postgres:postgres@localhost:5432/research — the
+      # service container above — so no env wiring is needed.
+      - name: Migrate to head
+        run: alembic upgrade head
+
+      - name: Repository round-trip on the migrated schema
+        run: python -m research_assistant.scripts.db_smoke
+
+      - name: Walk downgrades back to zero
+        run: alembic downgrade base

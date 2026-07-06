@@ -85,3 +85,24 @@ def test_compose_followup_anchors_on_the_topic():
     out = render.compose_followup("Who is Ronaldo?", "and his trophies?")
     assert "Who is Ronaldo?" in out  # original subject preserved
     assert "and his trophies?" in out
+
+
+# --- local-run shaping -------------------------------------------------------
+
+
+def test_shape_carries_full_token_usage():
+    """_shape must project ALL of the graph's usage counts, not just the total —
+    render._print_usage reads prompt/completion to show the in/out split and
+    compute the cost estimate (0/0 renders as a bogus "$0.0000")."""
+    from research_assistant.cli.local import _shape
+
+    final = {
+        "final_report": "r",
+        "sources": [],
+        "sub_questions": [],
+        "usage": {"prompt_tokens": 900, "completion_tokens": 100, "total_tokens": 1000},
+    }
+    task = _shape("q", final)
+    assert task["total_tokens"] == 1000
+    assert task["prompt_tokens"] == 900
+    assert task["completion_tokens"] == 100

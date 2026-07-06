@@ -53,6 +53,7 @@ async def create_research(
         source=SourceType.web,
         urls=body.urls or None,
         draft=body.draft,
+        source_docs=[d.model_dump() for d in body.source_docs] or None,
     )
     # enqueue out-of-band; import here keeps Celery off the API import path.
     from research_assistant.tasks import run_research_task

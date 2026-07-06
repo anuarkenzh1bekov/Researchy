@@ -41,13 +41,20 @@ class ResearchClient:
 
     # --- research ---
     def create_research(
-        self, query: str, *, urls: list[str] | None = None, draft: str | None = None
+        self,
+        query: str,
+        *,
+        urls: list[str] | None = None,
+        draft: str | None = None,
+        source_docs: list[dict] | None = None,
     ) -> dict:
         body: dict = {"query": query}
         if urls:
             body["urls"] = urls
         if draft:
             body["draft"] = draft
+        if source_docs:
+            body["source_docs"] = source_docs
         return self._ok(self._http.post("/research", json=body))  # type: ignore[return-value]
 
     def get_task(self, task_id: str) -> dict:

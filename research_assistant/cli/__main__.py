@@ -75,6 +75,32 @@ def _load_draft(path_str: str | None) -> str | None:
     return text
 
 
+def _load_source_files(paths: list[str] | None) -> list[dict] | None:
+    """Extract each file locally into a {title, text} source doc; exit with the
+    English reason on any problem — fail-fast, before a task is created."""
+    if not paths:
+        return None
+    from pathlib import Path
+
+    from research_assistant.ingest.drafts import DraftError, extract_draft_text
+
+    docs: list[dict] = []
+    for p in paths:
+        path = Path(p)
+        if not path.is_file():
+            print(f"✗ source file not found: {path}")
+            raise SystemExit(1)
+        try:
+            text, truncated = extract_draft_text(path.name, path.read_bytes())
+        except DraftError as e:
+            print(f"✗ source file {path.name}: {e}")
+            raise SystemExit(1) from e
+        if truncated:
+            print(f"⚠ {path.name} truncated to 50,000 characters")
+        docs.append({"title": path.name, "text": text})
+    return docs
+
+
 def _print_scrape_warnings(task: dict) -> None:
     """Per-URL outcome block from the structured scrape_report."""
     report = task.get("scrape_report") or []
@@ -86,7 +112,11 @@ def _print_scrape_warnings(task: dict) -> None:
     for r in report:
         line = f"  {marks.get(r.get('status'), '?')} {r.get('url')}"
         if r.get("status") == "ok":
-            line += f" — {r.get('pages_fetched', 0)} pages"
+            line += (
+                f" — {r.get('pages_fetched', 0)} pages"
+                if r.get("pages_fetched")
+                else f" — {r.get('chunks', 0)} chunks"
+            )
         elif r.get("error"):
             line += f" — {r['error']}"
         print(line)
@@ -98,9 +128,10 @@ def _run_research(
     fmt: str = "md",
     urls: list[str] | None = None,
     draft: str | None = None,
+    source_docs: list[dict] | None = None,
 ) -> None:
     """Submit a query, stream live progress, render the report, save it to a file."""
-    task = client.create_research(query, urls=urls, draft=draft)
+    task = client.create_research(query, urls=urls, draft=draft, source_docs=source_docs)
     task_id = task["id"]
     render.run_progress(client.stream_events(task_id))
     final = _await_final(client, task_id)
@@ -131,12 +162,13 @@ def _run_local(
     fmt: str = "md",
     urls: list[str] | None = None,
     draft: str | None = None,
+    source_docs: list[dict] | None = None,
 ) -> int:
     """Run the pipeline in-process (no API/Celery/Redis) and render the report."""
     from research_assistant.cli.local import run_local
 
     try:
-        task = run_local(query, depth, urls=urls, draft=draft)
+        task = run_local(query, depth, urls=urls, draft=draft, source_docs=source_docs)
     except Exception as e:  # noqa: BLE001 — one-line message, no traceback
         print(f"✗ local run failed: {e}")
         return 1
@@ -148,11 +180,18 @@ def _run_local(
 
 def _cmd_ask(args) -> int:
     draft = _load_draft(args.draft)
+    source_docs = _load_source_files(args.source_files)
     if args.local:
-        return _run_local(args.query, args.depth, args.format, urls=args.urls, draft=draft)
+        return _run_local(
+            args.query, args.depth, args.format,
+            urls=args.urls, draft=draft, source_docs=source_docs,
+        )
     return _guard(
         lambda: _with_client(
-            lambda c: _run_research(c, args.query, args.format, urls=args.urls, draft=draft)
+            lambda c: _run_research(
+                c, args.query, args.format,
+                urls=args.urls, draft=draft, source_docs=source_docs,
+            )
         )
     )
 
@@ -270,6 +309,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--draft",
         metavar="FILE",
         help="draft file (txt/md/pdf/docx) the paper should build on",
+    )
+    ask.add_argument(
+        "--source-file",
+        action="append",
+        dest="source_files",
+        metavar="FILE",
+        help="file (txt/md/pdf/docx) to cite as a research source (repeatable)",
     )
 
     sub.add_parser("history", help="list your past research tasks")

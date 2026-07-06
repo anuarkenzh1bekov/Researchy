@@ -100,6 +100,15 @@ def test_bib_entry_user_source_uses_misc_fallback():
     assert "Site Page" in entry
 
 
+def test_bib_entry_file_source_without_url_uses_text_fallback():
+    """File sources have no URL — the @misc entry must say 'uploaded document'
+    instead of emitting an empty \\url{} (which typesets as garbage)."""
+    entry = bib_entry(1, {"title": "Uploaded Article", "source_type": "user"})
+    assert entry.startswith("@misc")
+    assert "\\url{}" not in entry
+    assert "uploaded document" in entry
+
+
 def test_bib_entry_web_falls_back_to_title_author_and_nd():
     entry = bib_entry(1, WEB_SRC)
     assert entry.startswith("@misc{src1,")

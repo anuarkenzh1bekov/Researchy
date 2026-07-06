@@ -20,9 +20,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("research_task", sa.Column("source_urls", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
-    op.add_column("research_task", sa.Column("scrape_report", postgresql.JSONB(astext_type=sa.Text()), nullable=True))
-    op.add_column("research_task", sa.Column("draft_text", sqlmodel.sql.sqltypes.AutoString(), nullable=True))
+    op.add_column(
+        "research_task",
+        sa.Column("source_urls", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
+    op.add_column(
+        "research_task",
+        sa.Column("scrape_report", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+    )
+    op.add_column(
+        "research_task",
+        sa.Column("draft_text", sqlmodel.sql.sqltypes.AutoString(), nullable=True),
+    )
 
 
 def downgrade() -> None:

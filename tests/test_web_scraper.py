@@ -361,3 +361,60 @@ async def test_redirect_to_private_is_blocked():
     reports = await tool.prepare(Events())
     assert reports[0]["status"] == "failed"
     assert reports[0]["error"] == "private/local addresses are not supported"
+
+
+# --- pre-extracted source docs -----------------------------------------------------
+
+
+async def test_docs_only_prepare_and_search():
+    tool = UserSourcesTool([], docs=[{"title": "solar.pdf", "text": SOLAR}])
+    events = Events()
+    reports = await tool.prepare(events)
+    assert reports[0]["url"] == "file:solar.pdf"
+    assert reports[0]["status"] == "ok"
+    assert reports[0]["pages_fetched"] == 0
+    assert reports[0]["chunks"] >= 1
+    assert "done" in events.types()
+
+    hits = await tool.search("solar panels sunlight")
+    assert hits
+    assert hits[0].url == ""            # no URL — citation layer uses its fallback
+    assert hits[0].title == "solar.pdf"
+    assert hits[0].source_type == "user"
+
+
+async def test_mixed_urls_and_docs_share_one_index():
+    start = "https://site.test/"
+    routes = {start: _html_response(_page_html("Main", WIND))}
+    tool = UserSourcesTool(
+        [start],
+        docs=[{"title": "solar.pdf", "text": SOLAR}],
+        transport=_transport(routes),
+        check_url=_no_check,
+        render_js=_no_render,
+    )
+    reports = await tool.prepare(Events())
+    assert sorted(r["status"] for r in reports) == ["ok", "ok"]
+
+    hits = await tool.search("solar panels sunlight", max_results=2)
+    assert hits[0].title == "solar.pdf"  # the doc outranks the wind page
+
+
+async def test_blank_doc_title_falls_back_to_document():
+    tool = UserSourcesTool([], docs=[{"title": "   ", "text": SOLAR}])
+    reports = await tool.prepare(Events())
+    assert reports[0]["url"] == "file:document"
+
+    hits = await tool.search("solar panels sunlight")
+    assert hits
+    assert hits[0].title == "document"
+
+
+async def test_empty_doc_reports_failed():
+    tool = UserSourcesTool([], docs=[{"title": "empty.txt", "text": "   "}])
+    events = Events()
+    reports = await tool.prepare(events)
+    assert reports[0]["status"] == "failed"
+    assert reports[0]["error"] == "document contains no text"
+    assert "url_failed" in events.types()
+    assert "degraded" in events.types()  # nothing at all was indexed

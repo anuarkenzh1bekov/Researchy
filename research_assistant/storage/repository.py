@@ -8,6 +8,7 @@ directly). Each repo wraps a single AsyncSession passed in by the caller.
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
@@ -42,11 +43,12 @@ class ResearchTaskRepository:
         source: SourceType = SourceType.web,
         urls: list[str] | None = None,
         draft: str | None = None,
+        source_docs: list | None = None,
     ) -> ResearchTask:
-        """urls/draft are stored as source_urls/draft_text (user-supplied research material)."""
+        """urls/draft/source_docs are user-supplied research material."""
         task = ResearchTask(
             user_id=user_id, query=query, source=source,
-            source_urls=urls, draft_text=draft,
+            source_urls=urls, draft_text=draft, source_docs=source_docs,
         )
         try:
             self._s.add(task)
@@ -114,6 +116,43 @@ class ResearchTaskRepository:
     async def save_scrape_report(self, task_id: uuid.UUID, report: list[dict]) -> ResearchTask:
         task = await self._require(task_id)
         task.scrape_report = report
+        return await self._save(task)
+
+    async def latest_pending_by_user(self, user_id: str) -> ResearchTask | None:
+        """Newest still-pending task — the bot attaches follow-up documents to it."""
+        try:
+            stmt = (
+                select(ResearchTask)
+                .where(ResearchTask.user_id == user_id)
+                .where(ResearchTask.status == TaskStatus.pending)
+                .order_by(ResearchTask.created_at.desc())
+                .limit(1)
+            )
+            result = await self._s.exec(stmt)
+            return result.first()
+        except SQLAlchemyError as e:
+            raise RepositoryError(f"latest pending task failed: {e}") from e
+
+    async def resolve_document_role(
+        self, task_id: uuid.UUID, *, keep: Literal["draft", "source"]
+    ) -> ResearchTask:
+        """A bot document lands as BOTH draft_text and source_docs[0] (filenames
+        don't fit in button callback data); the user's tap keeps one role and
+        drops the other. keep="draft" removes ONLY the mirrored first source doc,
+        so follow-up documents appended meanwhile survive; keep="source" nulls
+        draft_text."""
+        if keep not in ("draft", "source"):
+            raise ValueError(f"keep must be 'draft' or 'source', got {keep!r}")
+        task = await self._require(task_id)
+        if keep == "draft":
+            task.source_docs = (task.source_docs or [])[1:] or None
+        else:
+            task.draft_text = None
+        return await self._save(task)
+
+    async def append_source_doc(self, task_id: uuid.UUID, doc: dict) -> ResearchTask:
+        task = await self._require(task_id)
+        task.source_docs = [*(task.source_docs or []), doc]  # reassign, don't mutate
         return await self._save(task)
 
     # --- internals ---
