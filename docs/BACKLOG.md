@@ -43,7 +43,11 @@ across consoles and no longer depends on `_force_utf8()` having run first.
 *unexpected* render error still prints one line instead of a traceback (matches the
 module's "no tracebacks" intent). Low priority now that the known crash is gone.
 
-## Dev launcher: start all three processes with one command
+## [DONE] Dev launcher: start all three processes with one command
+
+**Done:** `scripts/dev.ps1` — brings up Docker infra (`--wait` for healthchecks), runs
+Alembic migrations, then opens the API and the Celery worker (`--pool=solo`) in their own
+windows; `-Stop` kills both trees and stops the containers. Documented in README Quick start.
 
 **Problem:** a working setup needs three processes — API (uvicorn), Celery worker
 (`--pool=solo` on Windows), and the Docker infra (Postgres + Redis). Starting them

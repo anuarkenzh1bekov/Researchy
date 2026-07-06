@@ -127,6 +127,10 @@ research_assistant/
 Full stack (durable tasks, SSE, persistence) needs three processes - Docker infra, the API,
 and a Celery worker:
 
+> **Windows shortcut:** once deps and `.env` are in place (steps 2-3),
+> `.\scripts\dev.ps1` does the rest in one go - infra, migrations, API and worker
+> in their own windows. `.\scripts\dev.ps1 -Stop` tears it all down.
+
 ```bash
 # 1. infra - Postgres + pgvector, Redis
 docker compose up -d
