@@ -4,11 +4,11 @@ with the existing fakes — no LLM, no graph run."""
 
 from __future__ import annotations
 
-from research_assistant.agents.nodes import (
+from research_assistant.agents.nodes import planner_node
+from research_assistant.agents.prompts import (
     PLANNER_DRAFT_CHARS,
     _planner_messages,
     _synthesizer_messages,
-    planner_node,
 )
 from research_assistant.llm.base import LLMProviderConfig
 from tests.fakes import FakeProvider

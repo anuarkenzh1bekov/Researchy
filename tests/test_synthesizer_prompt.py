@@ -7,7 +7,7 @@ headings of their own."""
 
 from __future__ import annotations
 
-from research_assistant.agents.nodes import (
+from research_assistant.agents.prompts import (
     _critic_messages,
     _planner_messages,
     _researcher_messages,

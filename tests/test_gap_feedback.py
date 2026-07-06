@@ -5,7 +5,8 @@ the actual weakness instead of blindly repeating the same search."""
 
 from __future__ import annotations
 
-from research_assistant.agents.nodes import _researcher_messages, route_after_critic
+from research_assistant.agents.nodes import route_after_critic
+from research_assistant.agents.prompts import _researcher_messages
 from research_assistant.agents.schemas import CriticOutput
 
 
