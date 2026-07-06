@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from research_assistant.api import bot, research
+from research_assistant.api import bot, ops, research
 from research_assistant.core.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -40,11 +40,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="Multi-Agent Research Assistant", version="0.1.0", lifespan=lifespan)
     app.include_router(research.router)
     app.include_router(bot.router)
-
-    @app.get("/health", tags=["meta"])
-    async def health() -> dict:
-        return {"status": "ok"}
-
+    app.include_router(ops.router)
     return app
 
 

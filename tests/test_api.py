@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -57,6 +58,13 @@ class FakeTaskRepo:
 
     async def list_by_user(self, user_id, *, limit=50):
         return [t for t in self.tasks.values() if t.user_id == user_id]
+
+    async def update_status(self, task_id, status, *, error_message=None):
+        task = self.tasks[task_id]
+        task.status = status
+        if error_message is not None:
+            task.error_message = error_message
+        return task
 
 
 class FakeEventRepo:
@@ -106,6 +114,8 @@ def client(monkeypatch):
         deps_mod, "get_settings", lambda: Settings(_env_file=None, api_auth_enabled=True)
     )
     monkeypatch.setattr(deps_mod, "ApiKeyRepository", FakeApiKeyRepo)
+    # deterministic pending-timeout regardless of the dev box's .env
+    monkeypatch.setattr(research_mod, "get_settings", lambda: Settings(_env_file=None))
     monkeypatch.setattr(research_mod, "ResearchTaskRepository", FakeTaskRepo)
     monkeypatch.setattr(research_mod, "AgentEventRepository", FakeEventRepo)
 
@@ -264,6 +274,47 @@ async def test_stream_subscribes_before_replay_and_dedupes(client, monkeypatch):
     ids = [f["event_id"] for f in frames]
     assert len(ids) == len(set(ids)), f"duplicate events sent: {ids}"
     assert [f["agent_name"] for f in frames] == ["planner", "synthesizer"]
+
+
+# --- pending timeout ---------------------------------------------------------------
+
+
+async def _seed_stale_pending(age_seconds: int = 400) -> ResearchTask:
+    """A pending task older than the default task_pending_timeout_seconds (300)."""
+    task = await _seed_task()
+    task.created_at = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    return task
+
+
+async def test_stale_pending_flips_to_failed_on_get(client):
+    task = await _seed_stale_pending()
+    r = await client.get(f"/research/{task.id}", headers=_auth())
+    body = r.json()
+    assert body["status"] == "failed"
+    assert "worker" in body["error_message"]
+
+
+async def test_fresh_pending_stays_pending_on_get(client):
+    task = await _seed_task()
+    r = await client.get(f"/research/{task.id}", headers=_auth())
+    assert r.json()["status"] == "pending"
+
+
+async def test_history_expires_stale_pending(client):
+    await _seed_stale_pending()
+    r = await client.get("/research/history", headers=_auth())
+    assert [t["status"] for t in r.json()] == ["failed"]
+
+
+async def test_stream_stale_pending_emits_terminal_failed(client):
+    """No events were ever published for a never-picked-up task — the stream
+    must emit a synthetic terminal frame instead of waiting on Redis forever."""
+    task = await _seed_stale_pending()
+    r = await client.get(f"/research/{task.id}/stream", headers=_auth())
+    frames = _frames(r.text)
+    assert len(frames) == 1
+    assert frames[0]["agent_name"] == "task"
+    assert frames[0]["event_type"] == "failed"
 
 
 # --- user sources + draft ---------------------------------------------------------

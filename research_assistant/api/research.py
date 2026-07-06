@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -18,8 +19,9 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from research_assistant.api.deps import require_principal
 from research_assistant.api.schemas import CreateResearchRequest, TaskView
+from research_assistant.core.settings import get_settings
 from research_assistant.storage.db import get_session
-from research_assistant.storage.models import SourceType
+from research_assistant.storage.models import SourceType, TaskStatus
 from research_assistant.storage.repository import (
     AgentEventRepository,
     ResearchTaskRepository,
@@ -40,6 +42,25 @@ async def _owned_task_or_404(task_id, principal, repo):
 def _sse(payload: dict) -> str:
     """Format one Server-Sent Event frame."""
     return f"data: {json.dumps(payload)}\n\n"
+
+
+async def _expire_if_stale(task, repo):
+    """A task still `pending` past the timeout was never picked up (dead or
+    absent Celery worker) — flip it to failed at read time so clients don't
+    watch `pending` forever. Lazy by design: no sweeper process; if a worker
+    does grab it later, its own running/done updates simply overwrite this."""
+    timeout = get_settings().task_pending_timeout_seconds
+    if not timeout or task.status != TaskStatus.pending:
+        return task
+    if (datetime.now(UTC) - task.created_at).total_seconds() <= timeout:
+        return task
+    return await repo.update_status(
+        task.id,
+        TaskStatus.failed,
+        error_message=(
+            f"task was not picked up within {timeout}s — is the Celery worker running?"
+        ),
+    )
 
 
 @router.post("", response_model=TaskView, status_code=201)
@@ -86,8 +107,9 @@ async def my_history(
     principal: str = Depends(require_principal),
     session: AsyncSession = Depends(get_session),
 ) -> list[TaskView]:
-    tasks = await ResearchTaskRepository(session).list_by_user(principal)
-    return [TaskView.from_task(t) for t in tasks]
+    repo = ResearchTaskRepository(session)
+    tasks = await repo.list_by_user(principal)
+    return [TaskView.from_task(await _expire_if_stale(t, repo)) for t in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskView)
@@ -96,8 +118,9 @@ async def get_research(
     principal: str = Depends(require_principal),
     session: AsyncSession = Depends(get_session),
 ) -> TaskView:
-    task = await _owned_task_or_404(task_id, principal, ResearchTaskRepository(session))
-    return TaskView.from_task(task)
+    repo = ResearchTaskRepository(session)
+    task = await _owned_task_or_404(task_id, principal, repo)
+    return TaskView.from_task(await _expire_if_stale(task, repo))
 
 
 @router.get("/{task_id}/stream")
@@ -114,7 +137,9 @@ async def stream_research(
     from research_assistant.events import subscriber
 
     # ownership gate before opening the stream
-    await _owned_task_or_404(task_id, principal, ResearchTaskRepository(session))
+    repo = ResearchTaskRepository(session)
+    task = await _owned_task_or_404(task_id, principal, repo)
+    task = await _expire_if_stale(task, repo)
 
     async def gen() -> AsyncIterator[str]:
         # 1. open the live subscription BEFORE the replay query — events
@@ -142,6 +167,23 @@ async def stream_research(
                 yield _sse(event)
                 if subscriber.is_terminal(event):
                     return  # already finished before the client connected
+
+            if task.status == TaskStatus.failed:
+                # failed, but no terminal event in the log (stale-pending expiry
+                # above, or the worker died before publishing) — emit a synthetic
+                # terminal frame so the client isn't left on a live tail that
+                # will never speak.
+                yield _sse(
+                    {
+                        "event_id": None,
+                        "created_at": task.updated_at.isoformat(),
+                        "task_id": str(task_id),
+                        "agent_name": "task",
+                        "event_type": "failed",
+                        "payload": {"error": task.error_message},
+                    }
+                )
+                return
 
             # 3. live tail until terminal (iter_events owns pubsub cleanup now).
             handed_over = True

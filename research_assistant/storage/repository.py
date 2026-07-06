@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
+from sqlalchemy import extract, func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -154,6 +155,41 @@ class ResearchTaskRepository:
         task = await self._require(task_id)
         task.source_docs = [*(task.source_docs or []), doc]  # reassign, don't mutate
         return await self._save(task)
+
+    async def stats(self) -> dict:
+        """Aggregates for the /metrics endpoint: task counts by status, and
+        duration/token sums over completed tasks. Computed at scrape time —
+        the worker owns the state transitions, so the DB is the only place
+        that sees them all."""
+        try:
+            by_status = await self._s.exec(
+                select(ResearchTask.status, func.count()).group_by(ResearchTask.status)  # type: ignore[arg-type]
+            )
+            counts = dict(by_status.all())
+            done = await self._s.exec(
+                select(  # type: ignore[call-overload]
+                    func.count(),
+                    func.coalesce(
+                        func.sum(
+                            extract(
+                                "epoch",
+                                col(ResearchTask.updated_at) - col(ResearchTask.created_at),
+                            )
+                        ),
+                        0,
+                    ),
+                    func.coalesce(func.sum(ResearchTask.total_tokens), 0),
+                ).where(ResearchTask.status == TaskStatus.done)
+            )
+            done_count, duration_sum, tokens_sum = done.one()
+        except SQLAlchemyError as e:
+            raise RepositoryError(f"task stats failed: {e}") from e
+        return {
+            "tasks_by_status": counts,
+            "done_count": done_count,
+            "done_duration_seconds_sum": float(duration_sum),
+            "total_tokens_sum": int(tokens_sum),
+        }
 
     # --- internals ---
     async def _require(self, task_id: uuid.UUID) -> ResearchTask:

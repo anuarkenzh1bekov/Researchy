@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     # --- pipeline tuning ---
     max_revisions: int = 2
     task_time_limit_seconds: int = 600
+    # A task still `pending` after this many seconds was never picked up (dead
+    # or absent Celery worker); API reads flip it to failed instead of showing
+    # `pending` forever. 0 disables the check.
+    task_pending_timeout_seconds: int = 300
     embedding_dim: int = 1536
 
     @property

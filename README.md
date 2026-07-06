@@ -301,6 +301,24 @@ Scoped deliberately for a portfolio backend - enough to show the pattern, not a 
 Intentionally out of scope (documented seams, not built): user signup / passwords, JWT
 issuance / rotation, RBAC, rate limiting, audit logging.
 
+## 🩺 Operations
+
+The system is four moving parts (API, Celery worker, Redis, Postgres), so "is it up?" has
+four answers. Two unauthenticated endpoints cover them:
+
+- **`GET /health`** - pings Postgres (`SELECT 1`), Redis (`PING`) **and the Celery worker**
+  (broker round-trip): `200 {"status": "ok"}` when all three respond, `503` with the failing
+  check's reason otherwise. An alive API process alone proves nothing when the worker is
+  dead and every task would sit `pending` forever.
+- **`GET /metrics`** - Prometheus text format, aggregated from the DB at scrape time: task
+  counts by status, create-to-done duration sum/count, total LLM tokens consumed.
+- **Pending timeout** - a task not picked up within `TASK_PENDING_TIMEOUT_SECONDS`
+  (default 300; `0` disables) flips to `failed` on read with a plain-English reason, and its
+  SSE stream emits a terminal event instead of waiting forever.
+
+Intentionally out of scope: full OpenTelemetry tracing (the per-agent `agent_event` log
+already carries timestamps per pipeline stage - a documented seam, not built).
+
 ## 🗺️ Roadmap
 
 Schema + module seams already accommodate these as one-module additions - see `# EXTENSION:`
