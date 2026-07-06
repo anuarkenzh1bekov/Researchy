@@ -126,11 +126,13 @@ def client(monkeypatch):
     import research_assistant.tasks as tasks_mod
 
     enqueued: list[str] = []
+    depths: list[str | None] = []
 
     class _StubTask:
         @staticmethod
-        def delay(task_id):
+        def delay(task_id, depth=None):
             enqueued.append(task_id)
+            depths.append(depth)
 
     monkeypatch.setattr(tasks_mod, "run_research_task", _StubTask, raising=False)
 
@@ -148,6 +150,7 @@ def client(monkeypatch):
     transport = httpx.ASGITransport(app=app)
     c = httpx.AsyncClient(transport=transport, base_url="http://test")
     c.enqueued = enqueued
+    c.depths = depths
     return c
 
 
@@ -199,6 +202,21 @@ async def test_create_enqueues_and_uses_principal_not_body(client):
     assert body["user_id"] == OWNER  # body user_id ignored — IDOR closed
     assert body["status"] == "pending"
     assert client.enqueued == [body["id"]]
+
+
+async def test_create_with_depth_rides_to_the_worker(client):
+    """`depth` on POST /research must reach the Celery task (same knob the bot
+    and --local already have); omitting it enqueues None → the default profile."""
+    r = await client.post("/research", json={"query": "q?", "depth": "deep"}, headers=_auth())
+    assert r.status_code == 201
+    r = await client.post("/research", json={"query": "q?"}, headers=_auth())
+    assert r.status_code == 201
+    assert client.depths == ["deep", None]
+
+
+async def test_create_rejects_unknown_depth(client):
+    r = await client.post("/research", json={"query": "q?", "depth": "extreme"}, headers=_auth())
+    assert r.status_code == 422  # fail-fast, not a silent fallback in the worker
 
 
 async def test_get_foreign_task_is_404_not_403(client):

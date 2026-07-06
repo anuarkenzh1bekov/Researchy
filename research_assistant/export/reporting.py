@@ -54,8 +54,8 @@ def render(task: dict, fmt: str = "md") -> bytes:
     if fmt == "pdf":
         return _pdf_bytes(task)
     if fmt in ("tex", "paper"):
-        # lazy: LaTeX/APA export lives in its own module (latex.py)
-        from research_assistant import latex
+        # lazy: LaTeX/APA export lives in its own module (export/latex.py)
+        from research_assistant.export import latex
 
         return latex.to_tex(task).encode("utf-8") if fmt == "tex" else latex.to_pdf(task)
     raise ValueError(f"unknown format {fmt!r} — choose from {', '.join(FORMATS)}")

@@ -126,7 +126,7 @@ def _body(blocks: list[tuple[str, str]]) -> str:
 
 def to_tex(task: dict) -> str:
     """The full self-contained LaTeX document for a finished task."""
-    from research_assistant.reporting import _blocks
+    from research_assistant.export.reporting import _blocks
 
     blocks = _blocks(task.get("final_report", ""))
     # leading paragraphs before the first heading = the executive summary the

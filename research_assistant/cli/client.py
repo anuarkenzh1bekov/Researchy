@@ -44,11 +44,14 @@ class ResearchClient:
         self,
         query: str,
         *,
+        depth: str | None = None,
         urls: list[str] | None = None,
         draft: str | None = None,
         source_docs: list[dict] | None = None,
     ) -> dict:
         body: dict = {"query": query}
+        if depth:
+            body["depth"] = depth
         if urls:
             body["urls"] = urls
         if draft:

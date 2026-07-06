@@ -14,9 +14,9 @@ import time
 
 import httpx
 
-from research_assistant import reporting
-from research_assistant.cli import config, render
+from research_assistant.cli import chat, config, prompt, render
 from research_assistant.cli.client import APIError, ResearchClient
+from research_assistant.export import reporting
 
 
 def _client() -> ResearchClient:
@@ -126,12 +126,15 @@ def _run_research(
     client: ResearchClient,
     query: str,
     fmt: str = "md",
+    depth: str | None = None,
     urls: list[str] | None = None,
     draft: str | None = None,
     source_docs: list[dict] | None = None,
 ) -> None:
     """Submit a query, stream live progress, render the report, save it to a file."""
-    task = client.create_research(query, urls=urls, draft=draft, source_docs=source_docs)
+    task = client.create_research(
+        query, depth=depth, urls=urls, draft=draft, source_docs=source_docs
+    )
     task_id = task["id"]
     render.run_progress(client.stream_events(task_id))
     final = _await_final(client, task_id)
@@ -189,7 +192,7 @@ def _cmd_ask(args) -> int:
     return _guard(
         lambda: _with_client(
             lambda c: _run_research(
-                c, args.query, args.format,
+                c, args.query, args.format, args.depth,
                 urls=args.urls, draft=draft, source_docs=source_docs,
             )
         )
@@ -238,11 +241,11 @@ def _with_client(fn) -> None:
 
 def _repl() -> int:
     cfg = config.load()
-    render.print_banner(base_url=cfg.base_url, has_key=bool(cfg.api_key))
+    prompt.print_banner(base_url=cfg.base_url, has_key=bool(cfg.api_key))
     topic: str | None = None  # the running conversation subject, for follow-ups
     while True:
         try:
-            query = render.prompt()
+            query = prompt.prompt()
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -254,12 +257,12 @@ def _repl() -> int:
             topic = None
             render.print_chat("Context cleared — ask a fresh question.")
             continue
-        reply = render.chitchat(query)
+        reply = chat.chitchat(query)
         if reply is not None:
             render.print_chat(reply)
             continue
-        if topic and render.is_followup(query):
-            research_query = render.compose_followup(topic, query)
+        if topic and chat.is_followup(query):
+            research_query = chat.compose_followup(topic, query)
             render.print_chat(f"↳ following up on: {topic[:60]}")
         else:
             research_query = query
@@ -287,7 +290,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--depth",
         choices=["quick", "standard", "deep"],
         default=None,
-        help="effort level for --local runs (default: standard)",
+        help="research effort level, local or via the API (default: standard)",
     )
     ask.add_argument(
         "--format",

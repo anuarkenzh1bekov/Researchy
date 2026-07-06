@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from research_assistant import reporting
-from research_assistant.latex import (
+from research_assistant.export import reporting
+from research_assistant.export.latex import (
     bib_entry,
     citep,
     tex_escape,
@@ -179,7 +179,7 @@ def test_save_report_paper_gets_pdf_extension(tmp_path, monkeypatch):
 
 
 def test_render_paper_without_tectonic_raises_hint(monkeypatch):
-    import research_assistant.latex as latex
+    import research_assistant.export.latex as latex
 
     monkeypatch.setattr(latex.shutil, "which", lambda _: None)
     with pytest.raises(RuntimeError, match="tectonic"):

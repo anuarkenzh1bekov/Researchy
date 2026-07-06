@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field, field_validator
@@ -29,6 +30,9 @@ class CreateResearchRequest(BaseModel):
     # user_id is NOT accepted from the client — it comes from the authenticated
     # principal (see api/deps.require_principal), which is what prevents IDOR.
     query: str = Field(..., min_length=1)
+    # pipeline effort profile (agents/profiles); None → the default profile.
+    # Rides as a Celery task argument, not a task column — same as the bot path.
+    depth: Literal["quick", "standard", "deep"] | None = None
     # user-supplied research material; validated fail-fast so a bad URL is a
     # 422 now, not a scraper error a minute into the task.
     urls: list[str] = Field(default_factory=list, max_length=MAX_URLS)

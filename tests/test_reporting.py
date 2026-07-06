@@ -8,7 +8,7 @@ import importlib.util
 
 import pytest
 
-from research_assistant import reporting as export
+from research_assistant.export import reporting as export
 
 # A finished task with a Markdown body exercising headings, bullets, and inline
 # markup — plus a Cyrillic word to keep the PDF Unicode path honest.

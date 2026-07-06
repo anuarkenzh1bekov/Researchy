@@ -80,7 +80,7 @@ async def create_research(
     # enqueue out-of-band; import here keeps Celery off the API import path.
     from research_assistant.tasks import run_research_task
 
-    run_research_task.delay(str(task.id))
+    run_research_task.delay(str(task.id), body.depth)
     return TaskView.from_task(task)
 
 

@@ -110,6 +110,7 @@ research_assistant/
 ├── events/   # Redis Pub/Sub publisher (agents) + subscriber (API SSE / bot)
 ├── tasks/    # Celery app + run_research_task (the only agents↔storage wiring)
 ├── api/      # FastAPI app: research CRUD + SSE + bot connect/disconnect/status
+├── export/   # report files: md/docx/pdf renderer + LaTeX/APA paper emitter
 ├── bot/      # dynamic per-token Telegram bot lifecycle + aiogram handlers
 ├── cli/      # terminal client (httpx + rich); also an in-process `--local` runner
 ├── eval/     # offline golden-set harness + LLM-judge (faithfulness/coverage)
@@ -237,6 +238,8 @@ research ask "compare Rust and Go for systems work" --local --depth deep
 
 `--depth quick | standard | deep` (default `standard`) scales one knob across the whole run:
 number of sub-questions, sources per sub-question, and Critic→Researcher revision rounds.
+It works with and without `--local` — over the API it rides as `depth` on `POST /research`
+(the same knob the Telegram bot's ⚡/🔍/🧠 buttons use).
 
 ### Telegram bot - run one with zero infra
 
@@ -256,7 +259,7 @@ bots through the API - use `/bot/connect` (see [Quick start](#-quick-start)) and
 
 The API-connected bot sends the finished report as a `.md` attachment with **inline
 [DOCX] / [PDF] buttons** - a tap re-renders that format on demand (needs the `export` extra
-on the bot host). The same one renderer (`research_assistant/reporting.py`) backs the CLI's
+on the bot host). The same one renderer (`research_assistant/export/`) backs the CLI's
 `--format` flag and the bot buttons.
 
 ## 🧪 Evaluation
@@ -327,7 +330,6 @@ comments in code; no schema migration required:
 - Session memory / semantic recall (`ResearchTask.embedding` pgvector column)
 - Custom user-defined agents (`LLMAgentConfig` schema sketch - flip `table=True` to enable)
 - Confidence scoring on findings
-- Threading depth profiles through the API / Celery path (currently `--local` only)
 
 ## 🤖 Build prompt
 

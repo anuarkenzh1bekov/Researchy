@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 
-from research_assistant.cli import config, render
+from research_assistant.cli import chat, config
 from research_assistant.cli.sse import iter_events, parse_data_line
 
 # --- SSE parsing -------------------------------------------------------------
@@ -65,24 +65,48 @@ def test_load_missing_file_uses_default(tmp_path):
     assert loaded.api_key is None
 
 
+# --- client wire contract ----------------------------------------------------
+
+
+def test_create_research_sends_depth():
+    """`ask --depth` must ride the POST /research body (None is omitted, so the
+    server default stays in charge when the flag isn't given)."""
+    import httpx
+
+    from research_assistant.cli.client import ResearchClient
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(201, json={"id": "x"})
+
+    client = ResearchClient(config.Config(base_url="http://test"))
+    client._http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://test")
+    client.create_research("q", depth="deep")
+    client.create_research("q")
+    assert bodies[0]["depth"] == "deep"
+    assert "depth" not in bodies[1]
+
+
 # --- follow-up detection -----------------------------------------------------
 
 
 def test_is_followup_matches_connective_openers():
-    assert render.is_followup("and what about his trophies?")
-    assert render.is_followup("Why?")
-    assert render.is_followup("а что насчёт защиты?")
-    assert render.is_followup("подробнее про это")
+    assert chat.is_followup("and what about his trophies?")
+    assert chat.is_followup("Why?")
+    assert chat.is_followup("а что насчёт защиты?")
+    assert chat.is_followup("подробнее про это")
 
 
 def test_is_followup_rejects_fresh_questions():
     # contains 'why' but as a fresh, fully formed question — not an opener
-    assert not render.is_followup("Who is Cristiano Ronaldo?")
-    assert not render.is_followup("Explain how photosynthesis works")
+    assert not chat.is_followup("Who is Cristiano Ronaldo?")
+    assert not chat.is_followup("Explain how photosynthesis works")
 
 
 def test_compose_followup_anchors_on_the_topic():
-    out = render.compose_followup("Who is Ronaldo?", "and his trophies?")
+    out = chat.compose_followup("Who is Ronaldo?", "and his trophies?")
     assert "Who is Ronaldo?" in out  # original subject preserved
     assert "and his trophies?" in out
 
