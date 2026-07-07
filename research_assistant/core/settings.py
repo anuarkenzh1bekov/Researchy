@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     llm_max_tokens: int = 4096
 
+    # Per-agent model overrides (unset -> llm_model). The Planner/Critic do
+    # small structured-JSON calls and run fine on a cheaper, faster model than
+    # the Synthesizer, which writes the whole report.
+    llm_model_planner: str | None = None
+    llm_model_researcher: str | None = None
+    llm_model_critic: str | None = None
+    llm_model_synthesizer: str | None = None
+
     # provider keys — LiteLLM also picks these up from env by its own convention.
     openai_api_key: str | None = None
     anthropic_api_key: str | None = None

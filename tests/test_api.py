@@ -70,6 +70,13 @@ class FakeTaskRepo:
             task.error_message = error_message
         return task
 
+    async def fail_pending(self, ids, *, error_message):
+        for tid in ids:
+            task = self.tasks[tid]
+            if task.status == "pending":
+                task.status = "failed"
+                task.error_message = error_message
+
 
 class FakeEventRepo:
     events: list[AgentEvent] = []

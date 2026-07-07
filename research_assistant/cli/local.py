@@ -16,7 +16,11 @@ import asyncio
 
 from research_assistant.agents.graph import build_graph
 from research_assistant.agents.profiles import DepthProfile, get_profile
-from research_assistant.llm.factory import config_from_settings, get_provider
+from research_assistant.llm.factory import (
+    config_from_settings,
+    get_provider,
+    node_configs_from_settings,
+)
 from research_assistant.tools import get_tools
 
 _MARK = {"completed": "✓", "degraded": "⚠", "failed": "✗", "done": "✓", "url_failed": "✗"}
@@ -62,6 +66,7 @@ async def _run(
         publish=_progress,
         max_revisions=profile.max_revisions,
         config=config,
+        node_configs=node_configs_from_settings(),
         target_subquestions=profile.sub_questions,
         max_results=profile.max_results,
     )

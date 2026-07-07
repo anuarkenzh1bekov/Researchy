@@ -32,6 +32,7 @@ def build_graph(
     publish,
     max_revisions: int,
     config: LLMProviderConfig | None = None,
+    node_configs: dict[str, LLMProviderConfig] | None = None,
     checkpointer=None,
     target_subquestions: int = 4,
     max_results: int = 5,
@@ -42,8 +43,13 @@ def build_graph(
 
         config = config_from_settings()
 
-    # Planner/Critic must be deterministic for reliable JSON (fix #1).
-    strict = replace(config, temperature=0.0)
+    # Per-node override (e.g. a cheaper model for planner/critic); missing
+    # entries fall back to the shared config.
+    def node_cfg(name: str) -> LLMProviderConfig:
+        return (node_configs or {}).get(name) or config
+
+    # Planner/Critic must be deterministic for reliable JSON (fix #1) —
+    # applied AFTER the per-node override so it holds for any model choice.
 
     g = StateGraph(ResearchState)
     g.add_node(
@@ -51,7 +57,7 @@ def build_graph(
         partial(
             planner_node,
             provider=provider,
-            llm_config=strict,
+            llm_config=replace(node_cfg("planner"), temperature=0.0),
             publish=publish,
             target_subquestions=target_subquestions,
         ),
@@ -62,17 +68,25 @@ def build_graph(
             researcher_node,
             provider=provider,
             tools=tools,
-            llm_config=config,
+            llm_config=node_cfg("researcher"),
             publish=publish,
             max_results=max_results,
         ),
     )
     g.add_node(
-        "critic", partial(critic_node, provider=provider, llm_config=strict, publish=publish)
+        "critic",
+        partial(
+            critic_node,
+            provider=provider,
+            llm_config=replace(node_cfg("critic"), temperature=0.0),
+            publish=publish,
+        ),
     )
     g.add_node(
         "synthesizer",
-        partial(synthesizer_node, provider=provider, llm_config=config, publish=publish),
+        partial(
+            synthesizer_node, provider=provider, llm_config=node_cfg("synthesizer"), publish=publish
+        ),
     )
 
     g.add_edge(START, "planner")

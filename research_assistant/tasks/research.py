@@ -69,7 +69,11 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
     from research_assistant.agents.profiles import get_profile
     from research_assistant.core.exceptions import TaskExecutionError
     from research_assistant.events.publisher import make_publisher
-    from research_assistant.llm.factory import config_from_settings, get_provider
+    from research_assistant.llm.factory import (
+        config_from_settings,
+        get_provider,
+        node_configs_from_settings,
+    )
     from research_assistant.storage.db import get_sessionmaker
     from research_assistant.storage.models import TaskStatus
     from research_assistant.storage.repository import ResearchTaskRepository
@@ -126,6 +130,7 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
             publish=publish,
             max_revisions=profile.max_revisions,
             config=config,
+            node_configs=node_configs_from_settings(),
             checkpointer=checkpointer,
             target_subquestions=profile.sub_questions,
             max_results=profile.max_results,

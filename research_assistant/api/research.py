@@ -44,22 +44,29 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-async def _expire_if_stale(task, repo):
+def _is_stale_pending(task, timeout: int) -> bool:
     """A task still `pending` past the timeout was never picked up (dead or
-    absent Celery worker) — flip it to failed at read time so clients don't
-    watch `pending` forever. Lazy by design: no sweeper process; if a worker
-    does grab it later, its own running/done updates simply overwrite this."""
+    absent Celery worker)."""
+    return (
+        bool(timeout)
+        and task.status == TaskStatus.pending
+        and (datetime.now(UTC) - task.created_at).total_seconds() > timeout
+    )
+
+
+def _stale_message(timeout: int) -> str:
+    return f"task was not picked up within {timeout}s — is the Celery worker running?"
+
+
+async def _expire_if_stale(task, repo):
+    """Flip a stale-pending task to failed at read time so clients don't watch
+    `pending` forever. Lazy by design: no sweeper process; if a worker does
+    grab it later, its own running/done updates simply overwrite this."""
     timeout = get_settings().task_pending_timeout_seconds
-    if not timeout or task.status != TaskStatus.pending:
-        return task
-    if (datetime.now(UTC) - task.created_at).total_seconds() <= timeout:
+    if not _is_stale_pending(task, timeout):
         return task
     return await repo.update_status(
-        task.id,
-        TaskStatus.failed,
-        error_message=(
-            f"task was not picked up within {timeout}s — is the Celery worker running?"
-        ),
+        task.id, TaskStatus.failed, error_message=_stale_message(timeout)
     )
 
 
@@ -112,7 +119,17 @@ async def my_history(
 ) -> list[TaskSummaryView]:
     repo = ResearchTaskRepository(session)
     tasks = await repo.list_by_user(principal, limit=limit, before=before)
-    return [TaskSummaryView.from_task(await _expire_if_stale(t, repo)) for t in tasks]
+    # stale-pending expiry in ONE batch UPDATE, not a round-trip per task; the
+    # in-memory rows are patched to match so the response needs no re-read.
+    timeout = get_settings().task_pending_timeout_seconds
+    stale = [t for t in tasks if _is_stale_pending(t, timeout)]
+    if stale:
+        message = _stale_message(timeout)
+        await repo.fail_pending([t.id for t in stale], error_message=message)
+        for t in stale:
+            t.status = TaskStatus.failed
+            t.error_message = message
+    return [TaskSummaryView.from_task(t) for t in tasks]
 
 
 @router.get("/{task_id}", response_model=TaskView)

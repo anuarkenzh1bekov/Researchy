@@ -13,7 +13,11 @@ from research_assistant.agents.graph import build_graph
 from research_assistant.core.settings import get_settings
 from research_assistant.eval.cases import CASES, EvalCase
 from research_assistant.eval.judge import judge_report
-from research_assistant.llm.factory import config_from_settings, get_provider
+from research_assistant.llm.factory import (
+    config_from_settings,
+    get_provider,
+    node_configs_from_settings,
+)
 from research_assistant.tools import get_tools
 
 
@@ -63,6 +67,7 @@ async def run_eval(cases: list[EvalCase] | None = None) -> list[CaseResult]:
         publish=_noop_publish,
         max_revisions=settings.max_revisions,
         config=config,
+        node_configs=node_configs_from_settings(),
     )
     # Sequential on purpose: each case already fans out internally, and serial
     # runs keep us under provider rate limits and give readable streaming output.

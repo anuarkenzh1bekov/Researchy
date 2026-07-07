@@ -43,7 +43,10 @@ round before the report is written.
 
 **2. Model-agnostic LLM layer.** LiteLLM behind a custom `LLMProvider` Protocol - cloud
 (OpenAI / Anthropic / Gemini / Groq) and local (Ollama / vLLM / LM Studio) through one
-interface. Agents never import a vendor SDK; swap models with one env var.
+interface. Agents never import a vendor SDK; swap models with one env var. Per-agent
+overrides (`LLM_MODEL_PLANNER` / `_RESEARCHER` / `_CRITIC` / `_SYNTHESIZER`) route the
+small structured-JSON calls (Planner, Critic) to a cheaper, faster model while the
+Synthesizer keeps the strong one.
 
 **3. Durable execution.** Celery (`task_acks_late`, retries) + LangGraph `PostgresSaver`
 checkpointing means a crashed worker resumes from the last completed node instead of
@@ -300,7 +303,9 @@ loop and overlapping tasks don't re-hit Tavily / arXiv for the same query.
 Scoped deliberately for a portfolio backend - enough to show the pattern, not a full IAM:
 
 - **Per-user API keys** (`Authorization: Bearer <key>`), stored as a SHA-256 hash only; the
-  raw key is shown once at issue time.
+  raw key is shown once at issue time. Keys record `last_used_at` on every authenticated
+  request and can be revoked (`issue_api_key --list <user>` / `--revoke <key_id>`); a
+  revoked key gets the same 401 as an unknown one.
 - **No IDOR by construction** - `user_id` is never read from the request; it's derived from
   the key, and task reads 404 (not 403) for non-owners so ids don't leak.
 - **Secrets at rest** - Telegram bot tokens are Fernet-encrypted in the DB.

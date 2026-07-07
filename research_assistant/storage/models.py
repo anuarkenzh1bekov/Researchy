@@ -29,12 +29,12 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _ts_column(*, index: bool = False, onupdate=None) -> Column:
+def _ts_column(*, index: bool = False, onupdate=None, nullable: bool = False) -> Column:
     """A timezone-AWARE timestamp column. Without timezone=True the column is
     TIMESTAMP WITHOUT TIME ZONE, and asyncpg refuses to bind our tz-aware _now()
     values to it ("can't subtract offset-naive and offset-aware"). Storing UTC
     with tzinfo is also just correct."""
-    return Column(DateTime(timezone=True), nullable=False, index=index, onupdate=onupdate)
+    return Column(DateTime(timezone=True), nullable=nullable, index=index, onupdate=onupdate)
 
 
 class SourceType(StrEnum):
@@ -126,7 +126,7 @@ class ApiKey(SQLModel, table=True):
     """Maps an opaque API key to a user principal. Only the SHA-256 HASH is
     stored (see core/crypto.hash_api_key) — a DB leak never yields usable keys.
 
-    Deliberately minimal: no User table, no registration, no expiry/rotation.
+    Deliberately minimal: no User table, no registration, no automatic expiry.
     This is the auth identity seam — those are the obvious # EXTENSION:s."""
 
     __tablename__ = "api_key"
@@ -135,6 +135,10 @@ class ApiKey(SQLModel, table=True):
     key_hash: str = Field(index=True, unique=True)
     user_id: str = Field(index=True)
     label: str | None = None
+    # lifecycle: stamped on every authenticated request / set once by revoke.
+    # A revoked key fails auth exactly like an unknown one (401, no hint).
+    last_used_at: datetime | None = Field(default=None, sa_column=_ts_column(nullable=True))
+    revoked_at: datetime | None = Field(default=None, sa_column=_ts_column(nullable=True))
     created_at: datetime = Field(default_factory=_now, sa_column=_ts_column())
 
 

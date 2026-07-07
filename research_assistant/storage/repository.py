@@ -8,10 +8,10 @@ directly). Each repo wraps a single AsyncSession passed in by the caller.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
-from sqlalchemy import extract, func
+from sqlalchemy import extract, func, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -121,6 +121,25 @@ class ResearchTaskRepository:
             task.total_tokens = usage.get("total_tokens", 0)
         task.status = status
         return await self._save(task)
+
+    async def fail_pending(self, ids: list[uuid.UUID], *, error_message: str) -> None:
+        """Flip still-pending tasks to failed in ONE statement — the history
+        page's stale-expiry path, where a per-task update_status would round-trip
+        once per row. The status guard keeps the lazy-expiry semantics: a worker
+        that grabbed a task between the read and this write wins."""
+        if not ids:
+            return
+        try:
+            await self._s.execute(
+                update(ResearchTask)
+                .where(col(ResearchTask.id).in_(ids))
+                .where(col(ResearchTask.status) == TaskStatus.pending)
+                .values(status=TaskStatus.failed, error_message=error_message)
+            )
+            await self._s.commit()
+        except SQLAlchemyError as e:
+            await self._s.rollback()
+            raise RepositoryError(f"fail pending tasks failed: {e}") from e
 
     async def save_scrape_report(self, task_id: uuid.UUID, report: list[dict]) -> ResearchTask:
         task = await self._require(task_id)
@@ -236,7 +255,9 @@ class AgentEventRepository:
         try:
             self._s.add(event)
             await self._s.commit()
-            await self._s.refresh(event)
+            # no refresh: id/created_at are client-side defaults, already set on
+            # the instance, and the sessionmaker is expire_on_commit=False — a
+            # refresh here would add a SELECT round-trip per event for nothing.
         except SQLAlchemyError as e:
             await self._s.rollback()
             raise RepositoryError(f"add agent event failed: {e}") from e
@@ -334,11 +355,51 @@ class ApiKeyRepository:
         return raw
 
     async def user_for_key(self, raw_key: str) -> str | None:
-        """Resolve a raw key to its user principal, or None if unknown."""
+        """Resolve a raw key to its user principal. None for unknown AND for
+        revoked keys — a revoked key must be indistinguishable from a bad one.
+        Stamps last_used_at on success (one cheap UPDATE per authed request;
+        best-effort, a failed stamp must not fail auth)."""
         try:
             stmt = select(ApiKey).where(ApiKey.key_hash == hash_api_key(raw_key))
             result = await self._s.exec(stmt)
             record = result.one_or_none()
         except SQLAlchemyError as e:
             raise RepositoryError(f"lookup api key failed: {e}") from e
-        return record.user_id if record else None
+        if record is None or record.revoked_at is not None:
+            return None
+        try:
+            record.last_used_at = datetime.now(UTC)
+            self._s.add(record)
+            await self._s.commit()
+        except SQLAlchemyError:
+            await self._s.rollback()
+        return record.user_id
+
+    async def list_for_user(self, user_id: str) -> list[ApiKey]:
+        """All keys ever issued to a user (revoked included), oldest first —
+        the CLI lists these so an id can be picked for revoke()."""
+        try:
+            stmt = (
+                select(ApiKey)
+                .where(ApiKey.user_id == user_id)
+                .order_by(col(ApiKey.created_at).asc())
+            )
+            result = await self._s.exec(stmt)
+            return list(result.all())
+        except SQLAlchemyError as e:
+            raise RepositoryError(f"list api keys failed: {e}") from e
+
+    async def revoke(self, key_id: uuid.UUID) -> bool:
+        """Revoke a key by id. Idempotent; False if the id is unknown."""
+        try:
+            record = await self._s.get(ApiKey, key_id)
+            if record is None:
+                return False
+            if record.revoked_at is None:
+                record.revoked_at = datetime.now(UTC)
+                self._s.add(record)
+                await self._s.commit()
+            return True
+        except SQLAlchemyError as e:
+            await self._s.rollback()
+            raise RepositoryError(f"revoke api key failed: {e}") from e

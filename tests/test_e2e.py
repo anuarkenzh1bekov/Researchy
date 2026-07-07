@@ -126,10 +126,15 @@ async def test_full_stack_research_run(e2e_env, monkeypatch):
         key = await ApiKeyRepository(session).issue(user_id=user)
 
     enqueued: list[str] = []
+
+    def _delay(task_id: str, depth: str | None = None) -> None:
+        # signature must track run_research_task.delay(task_id, depth)
+        enqueued.append(task_id)
+
     monkeypatch.setattr(
         # patch where the route imports it from; keep the real task runnable
         "research_assistant.tasks.run_research_task",
-        type("Stub", (), {"delay": staticmethod(enqueued.append)}),
+        type("Stub", (), {"delay": staticmethod(_delay)}),
     )
 
     app = create_app()

@@ -17,7 +17,8 @@ import uuid
 
 async def main() -> None:
     from research_assistant.storage.db import get_sessionmaker
-    from research_assistant.storage.repository import ResearchTaskRepository
+    from research_assistant.storage.models import TaskStatus
+    from research_assistant.storage.repository import ApiKeyRepository, ResearchTaskRepository
 
     user_id = f"ci-smoke:{uuid.uuid4()}"
     async with get_sessionmaker()() as session:
@@ -41,6 +42,21 @@ async def main() -> None:
         appended = await repo.append_source_doc(created.id, {"title": "b.md", "text": "more"})
         assert appended.source_docs is not None
         assert [d["title"] for d in appended.source_docs] == ["a.md", "b.md"]
+
+        # batch stale-expiry: one UPDATE flips still-pending rows to failed
+        await repo.fail_pending([created.id], error_message="smoke expiry")
+        expired = await repo.get(created.id)
+        assert expired is not None and expired.status == TaskStatus.failed
+        assert expired.error_message == "smoke expiry"
+
+        # api-key lifecycle: issue -> auth stamps last_used -> revoke -> 401-path
+        keys = ApiKeyRepository(session)
+        raw = await keys.issue(user_id=user_id, label="smoke")
+        assert await keys.user_for_key(raw) == user_id
+        (key,) = await keys.list_for_user(user_id)
+        assert key.last_used_at is not None, "auth must stamp last_used_at"
+        assert await keys.revoke(key.id) is True
+        assert await keys.user_for_key(raw) is None, "revoked key must not resolve"
 
     print("db round-trip OK")
 

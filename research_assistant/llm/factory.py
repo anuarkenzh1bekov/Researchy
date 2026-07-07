@@ -31,22 +31,34 @@ def register_provider(name: str, provider: LLMProvider) -> None:
     _REGISTRY[name] = provider
 
 
-def config_from_settings() -> LLMProviderConfig:
-    """MVP global default LLM config, from settings.
+AGENT_NAMES = ("planner", "researcher", "critic", "synthesizer")
 
-    # EXTENSION: per-agent/per-task resolution. A `resolve_agent_config(
-    # task_id, agent_name)` seam lives in agents/ (it needs storage to read the
+
+def config_from_settings(agent: str | None = None) -> LLMProviderConfig:
+    """Global default LLM config, from settings. Pass an agent name to apply
+    its LLM_MODEL_<AGENT> override (model only — key/base stay global; LiteLLM
+    resolves per-provider keys from env by its own convention).
+
+    # EXTENSION: per-task resolution. A `resolve_agent_config(task_id,
+    # agent_name)` seam lives in agents/ (it needs storage to read the
     # LLMAgentConfig table) and falls back to THIS when no row exists.
     """
     s = get_settings()
+    model = (getattr(s, f"llm_model_{agent}") if agent else None) or s.llm_model
     return LLMProviderConfig(
         provider=s.llm_provider,
-        model=s.llm_model,
+        model=model,
         api_base=s.llm_api_base,
         api_key=s.llm_api_key,
         temperature=s.llm_temperature,
         max_tokens=s.llm_max_tokens,
     )
+
+
+def node_configs_from_settings() -> dict[str, LLMProviderConfig]:
+    """Per-node configs for build_graph — one entry per agent, each just the
+    global config with that agent's model override applied (if any)."""
+    return {a: config_from_settings(a) for a in AGENT_NAMES}
 
 
 if __name__ == "__main__":
