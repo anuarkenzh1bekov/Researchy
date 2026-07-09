@@ -108,6 +108,13 @@ _TYPE_CPS = 16.0  # typewriter speed (characters per second); lower = slower
 def _enable_windows_vt() -> None:
     """Turn on ANSI/VT processing for the console so our raw escape codes render
     (Windows Terminal has it on already; classic conhost needs the flag)."""
+    import sys
+
+    if sys.platform != "win32":
+        # callers are Windows-only (msvcrt path); the guard also lets mypy on
+        # Linux CI accept the windll access below.
+        return
+
     import ctypes
 
     k = ctypes.windll.kernel32
