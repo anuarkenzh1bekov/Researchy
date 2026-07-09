@@ -20,7 +20,7 @@ import research_assistant.api.research as research_mod
 from research_assistant.api.app import create_app
 from research_assistant.core.settings import Settings
 from research_assistant.storage.db import get_session
-from research_assistant.storage.models import AgentEvent, ResearchTask
+from research_assistant.storage.models import ResearchTask
 
 OWNER = "user-1"
 GOOD_KEY = "good-key"
@@ -77,33 +77,44 @@ class FakeTaskRepo:
                 task.status = "failed"
                 task.error_message = error_message
 
-
-class FakeEventRepo:
-    events: list[AgentEvent] = []
-    calls: list[str] = []  # shared ordering log with FakePubSub.subscribe
-
-    def __init__(self, session) -> None:
-        pass
-
-    async def list_by_task(self, task_id):
-        self.calls.append("replay")
-        return list(self.events)
+    async def cancel(self, task_id):
+        # mirrors the real guarded UPDATE: only a non-terminal task flips
+        task = self.tasks[task_id]
+        if task.status in ("pending", "running"):
+            task.status = "cancelled"
+        return task
 
 
-class FakePubSub:
-    """Stands in for the redis Pub/Sub object; feeds pre-queued live messages."""
+class FakeStream:
+    """Stands in for subscriber.read_events over the per-task Redis Stream.
 
-    live: list[dict] = []
+    `entries` plays the stream content (cursor semantics like XREAD: only
+    entries after last_id come back); `on_read` hooks let a test mutate state
+    mid-stream (e.g. flip the task's status while the route is heartbeating)."""
 
-    async def listen(self):
-        for event in self.live:
-            yield {"type": "message", "data": json.dumps(event)}
+    entries: list[dict] = []
+    reads: list[tuple[str, int | None]] = []
+    on_read: dict[int, object] = {}  # 1-based call number -> callable
 
-    async def unsubscribe(self, *a):
-        pass
+    @classmethod
+    async def read(cls, task_id, *, last_id="0", block_ms=None, count=None):
+        cls.reads.append((last_id, block_ms))
+        hook = cls.on_read.get(len(cls.reads))
+        if hook:
+            hook()
 
-    async def aclose(self):
-        pass
+        def seq(i) -> int:
+            return int(str(i).split("-")[0])
+
+        return [e for e in cls.entries if seq(e["event_id"]) > seq(last_id)]
+
+
+class _NullSessionCM:
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *a):
+        return False
 
 
 # --- fixtures --------------------------------------------------------------------
@@ -111,16 +122,12 @@ class FakePubSub:
 
 @pytest.fixture
 def client(monkeypatch):
-    # The SSE route opens its live Redis subscription BEFORE the replay (race
-    # fix), so every stream test would otherwise dial a real Redis — green on a
-    # dev box with the docker stack up, ConnectionError on CI. Fake it by
-    # default; tests that need specific live traffic override it again.
+    # The SSE route reads the per-task Redis Stream — fake it by default so
+    # stream tests never dial a real Redis (green on a dev box with the docker
+    # stack up, ConnectionError on CI).
     import research_assistant.events.subscriber as sub_mod
 
-    async def _fake_subscribe(task_id):
-        return FakePubSub()
-
-    monkeypatch.setattr(sub_mod, "subscribe", _fake_subscribe)
+    monkeypatch.setattr(sub_mod, "read_events", FakeStream.read)
     monkeypatch.setattr(
         deps_mod, "get_settings", lambda: Settings(_env_file=None, api_auth_enabled=True)
     )
@@ -128,25 +135,30 @@ def client(monkeypatch):
     # deterministic pending-timeout regardless of the dev box's .env
     monkeypatch.setattr(research_mod, "get_settings", lambda: Settings(_env_file=None))
     monkeypatch.setattr(research_mod, "ResearchTaskRepository", FakeTaskRepo)
-    monkeypatch.setattr(research_mod, "AgentEventRepository", FakeEventRepo)
+    # the live tail's liveness re-check opens its own short session
+    monkeypatch.setattr(
+        research_mod, "get_sessionmaker", lambda: (lambda: _NullSessionCM()), raising=False
+    )
 
     import research_assistant.tasks as tasks_mod
 
     enqueued: list[str] = []
     depths: list[str | None] = []
+    celery_ids: list[str | None] = []
 
     class _StubTask:
         @staticmethod
-        def delay(task_id, depth=None):
-            enqueued.append(task_id)
-            depths.append(depth)
+        def apply_async(args=(), task_id=None):
+            enqueued.append(args[0])
+            depths.append(args[1] if len(args) > 1 else None)
+            celery_ids.append(task_id)
 
     monkeypatch.setattr(tasks_mod, "run_research_task", _StubTask, raising=False)
 
     FakeTaskRepo.tasks = {}
-    FakeEventRepo.events = []
-    FakeEventRepo.calls = []
-    FakePubSub.live = []
+    FakeStream.entries = []
+    FakeStream.reads = []
+    FakeStream.on_read = {}
 
     app = create_app()
 
@@ -158,6 +170,7 @@ def client(monkeypatch):
     c = httpx.AsyncClient(transport=transport, base_url="http://test")
     c.enqueued = enqueued
     c.depths = depths
+    c.celery_ids = celery_ids
     return c
 
 
@@ -171,8 +184,16 @@ async def _seed_task(user_id: str = OWNER) -> ResearchTask:
     return task
 
 
-def _event(agent="planner", etype="started") -> AgentEvent:
-    return AgentEvent(task_id=uuid.uuid4(), agent_name=agent, event_type=etype, payload={})
+def _event(seq: int, agent="planner", etype="started") -> dict:
+    """One decoded stream event, as subscriber.read_events returns them."""
+    return {
+        "event_id": f"{seq}-0",
+        "created_at": "2026-07-09T00:00:00+00:00",
+        "task_id": str(uuid.uuid4()),
+        "agent_name": agent,
+        "event_type": etype,
+        "payload": {},
+    }
 
 
 # --- auth -----------------------------------------------------------------------
@@ -246,21 +267,118 @@ async def test_history_only_own_tasks(client):
     assert [t["user_id"] for t in r.json()] == [OWNER]
 
 
+async def test_create_uses_row_id_as_celery_task_id(client):
+    """The Celery message id IS the row id — that's what lets DELETE revoke a
+    queued task without storing a separate broker id."""
+    r = await client.post("/research", json={"query": "q?"}, headers=_auth())
+    assert client.celery_ids == [r.json()["id"]]
+
+
+# --- cancellation -------------------------------------------------------------------
+
+
+def _cancel_env(monkeypatch):
+    """Record celery revokes + published events for the DELETE route."""
+    import research_assistant.tasks as tasks_mod
+
+    revoked: list[str] = []
+    published: list[tuple[str, str]] = []
+
+    class _Ctl:
+        @staticmethod
+        def revoke(tid):
+            revoked.append(tid)
+
+    monkeypatch.setattr(
+        tasks_mod, "celery_app", type("C", (), {"control": _Ctl}), raising=False
+    )
+
+    async def fake_publish(task_id, *, agent_name, event_type, payload):
+        published.append((agent_name, event_type))
+
+    monkeypatch.setattr(research_mod, "publish_event", fake_publish)
+    return revoked, published
+
+
+async def test_cancel_pending_task(client, monkeypatch):
+    revoked, published = _cancel_env(monkeypatch)
+    task = await _seed_task()
+    r = await client.delete(f"/research/{task.id}", headers=_auth())
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+    assert revoked == [str(task.id)]  # the queued Celery message is revoked
+    assert published == [("task", "cancelled")]  # SSE/bot subscribers unblock
+
+
+async def test_cancel_running_task(client, monkeypatch):
+    revoked, published = _cancel_env(monkeypatch)
+    task = await _seed_task()
+    task.status = "running"
+    r = await client.delete(f"/research/{task.id}", headers=_auth())
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+
+
+async def test_cancel_is_idempotent(client, monkeypatch):
+    revoked, published = _cancel_env(monkeypatch)
+    task = await _seed_task()
+    await client.delete(f"/research/{task.id}", headers=_auth())
+    r = await client.delete(f"/research/{task.id}", headers=_auth())
+    assert r.status_code == 200
+    assert r.json()["status"] == "cancelled"
+    # the second DELETE is a no-op: no duplicate revoke, no duplicate event
+    assert revoked == [str(task.id)]
+    assert published == [("task", "cancelled")]
+
+
+async def test_cancel_finished_task_409(client, monkeypatch):
+    _cancel_env(monkeypatch)
+    task = await _seed_task()
+    task.status = "done"
+    r = await client.delete(f"/research/{task.id}", headers=_auth())
+    assert r.status_code == 409
+
+
+async def test_cancel_foreign_task_404(client, monkeypatch):
+    _cancel_env(monkeypatch)
+    task = await _seed_task(user_id="someone-else")
+    r = await client.delete(f"/research/{task.id}", headers=_auth())
+    assert r.status_code == 404  # existence not leaked, same as GET
+
+
+async def test_stream_cancelled_task_emits_terminal_frame(client):
+    """A task cancelled before any event was published: the stream must emit a
+    synthetic terminal frame (like the stale-pending case) instead of hanging."""
+    task = await _seed_task()
+    task.status = "cancelled"
+    r = await client.get(f"/research/{task.id}/stream", headers=_auth())
+    frames = _frames(r.text)
+    assert len(frames) == 1
+    assert frames[0]["agent_name"] == "task"
+    assert frames[0]["event_type"] == "cancelled"
+
+
 # --- SSE stream --------------------------------------------------------------------
 
 
 def _frames(text: str) -> list[dict]:
-    return [json.loads(line[len("data: ") :]) for line in text.splitlines() if line]
+    return [
+        json.loads(line[len("data: ") :])
+        for line in text.splitlines()
+        if line.startswith("data: ")
+    ]
 
 
 async def test_stream_replays_and_stops_at_terminal(client):
     task = await _seed_task()
-    FakeEventRepo.events = [_event("planner", "started"), _event("synthesizer", "completed")]
+    FakeStream.entries = [_event(1, "planner", "started"), _event(2, "synthesizer", "completed")]
     r = await client.get(f"/research/{task.id}/stream", headers=_auth())
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/event-stream")
     frames = _frames(r.text)
     assert [f["agent_name"] for f in frames] == ["planner", "synthesizer"]
+    # one non-blocking replay read was enough — no live tail after a terminal
+    assert FakeStream.reads == [("0", None)]
 
 
 async def test_stream_foreign_task_404(client):
@@ -268,41 +386,80 @@ async def test_stream_foreign_task_404(client):
     assert (await client.get(f"/research/{task.id}/stream", headers=_auth())).status_code == 404
 
 
-async def test_stream_subscribes_before_replay_and_dedupes(client, monkeypatch):
-    """The race fix: the live subscription must open BEFORE the replay query
-    (no gap an event can fall into), and an event arriving both ways (persisted
-    before the query, delivered live after subscribing) must be sent once."""
-    import research_assistant.events.subscriber as sub_mod
-
+async def test_stream_frames_carry_sse_id(client):
+    """Each frame's `id:` line is the stream entry id, so a reconnecting client
+    resumes via the standard Last-Event-ID mechanism."""
     task = await _seed_task()
-    replayed = _event("planner", "completed")
-    FakeEventRepo.events = [replayed]
+    FakeStream.entries = [_event(1, "synthesizer", "completed")]
+    r = await client.get(f"/research/{task.id}/stream", headers=_auth())
+    assert "id: 1-0\n" in r.text
 
-    def _live(e: AgentEvent | None, agent="synthesizer", etype="completed") -> dict:
-        return {
-            "event_id": str(e.id) if e else str(uuid.uuid4()),
-            "created_at": "2026-07-05T00:00:00",
-            "task_id": str(task.id),
-            "agent_name": e.agent_name if e else agent,
-            "event_type": e.event_type if e else etype,
-            "payload": {},
-        }
 
-    FakePubSub.live = [_live(replayed), _live(None)]  # duplicate, then terminal
+async def test_stream_resumes_from_last_event_id(client):
+    """A reconnect with Last-Event-ID must replay only what the client missed."""
+    task = await _seed_task()
+    FakeStream.entries = [
+        _event(1, "planner", "started"),
+        _event(2, "planner", "completed"),
+        _event(3, "synthesizer", "completed"),
+    ]
+    r = await client.get(
+        f"/research/{task.id}/stream",
+        headers={**_auth(), "Last-Event-ID": "2-0"},
+    )
+    frames = _frames(r.text)
+    assert [f["event_id"] for f in frames] == ["3-0"]  # 1-0 and 2-0 not resent
 
-    async def fake_subscribe(task_id):
-        FakeEventRepo.calls.append("subscribe")
-        return FakePubSub()
 
-    monkeypatch.setattr(sub_mod, "subscribe", fake_subscribe)
+async def test_stream_garbage_last_event_id_falls_back_to_full_replay(client):
+    """An id XREAD would reject must not blow up inside the generator (the 200
+    is already sent by then) — it degrades to a fresh connect from `0`."""
+    task = await _seed_task()
+    FakeStream.entries = [_event(1, "synthesizer", "completed")]
+    r = await client.get(
+        f"/research/{task.id}/stream",
+        headers={**_auth(), "Last-Event-ID": "not-a-stream-id"},
+    )
+    assert [f["event_id"] for f in _frames(r.text)] == ["1-0"]
+    assert FakeStream.reads == [("0", None)]  # cursor sanitized to a full replay
 
+
+async def test_stream_live_tail_heartbeats_between_reads(client):
+    """No events for a while must not look like a dead connection: the gap
+    yields an SSE comment frame (`: ping`) that proxies/clients see as traffic."""
+    task = await _seed_task()
+    task.status = "running"
+    # replay is empty; the first live read comes back empty (heartbeat); the
+    # second delivers the terminal event.
+    FakeStream.on_read = {
+        2: lambda: None,
+        3: lambda: FakeStream.entries.append(_event(1, "synthesizer", "completed")),
+    }
+    r = await client.get(f"/research/{task.id}/stream", headers=_auth())
+    assert ": ping" in r.text
+    frames = _frames(r.text)
+    assert [f["agent_name"] for f in frames] == ["synthesizer"]
+    # replay read is non-blocking, live reads block
+    assert FakeStream.reads[0][1] is None
+    assert all(block for _, block in FakeStream.reads[1:])
+
+
+async def test_stream_live_tail_notices_task_dying_without_terminal_event(client):
+    """Worker dies after the row flips to failed but before publishing the
+    terminal event: the heartbeat's liveness re-check must emit a synthetic
+    terminal frame instead of pinging forever."""
+    task = await _seed_task()
+    task.status = "running"
+
+    def _die():
+        task.status = "failed"
+        task.error_message = "worker crashed"
+
+    FakeStream.on_read = {2: _die}  # flips during the first (empty) live read
     r = await client.get(f"/research/{task.id}/stream", headers=_auth())
     frames = _frames(r.text)
-
-    assert FakeEventRepo.calls == ["subscribe", "replay"]  # subscription first
-    ids = [f["event_id"] for f in frames]
-    assert len(ids) == len(set(ids)), f"duplicate events sent: {ids}"
-    assert [f["agent_name"] for f in frames] == ["planner", "synthesizer"]
+    assert frames[-1]["event_type"] == "failed"
+    assert frames[-1]["agent_name"] == "task"
 
 
 # --- history pagination ------------------------------------------------------------
@@ -340,6 +497,22 @@ async def test_history_before_cursor_returns_older_page(client):
 async def test_history_rejects_bad_limit(client):
     assert (await client.get("/research/history?limit=0", headers=_auth())).status_code == 422
     assert (await client.get("/research/history?limit=999", headers=_auth())).status_code == 422
+
+
+async def test_task_view_includes_depth(client):
+    """The worker persists the resolved depth profile on the row; clients see
+    which effort level actually ran (history/reproducibility)."""
+    task = await _seed_task()
+    task.depth = "deep"
+    r = await client.get(f"/research/{task.id}", headers=_auth())
+    assert r.json()["depth"] == "deep"
+
+
+async def test_history_includes_depth(client):
+    task = await _seed_task()
+    task.depth = "quick"
+    r = await client.get("/research/history", headers=_auth())
+    assert r.json()[0]["depth"] == "quick"
 
 
 async def test_history_items_are_slim(client):

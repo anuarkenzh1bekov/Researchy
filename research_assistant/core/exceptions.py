@@ -38,6 +38,12 @@ class TaskExecutionError(ResearchAssistantError):
     """Raised when the research pipeline task fails in a non-transient way."""
 
 
+class TaskCancelledError(ResearchAssistantError):
+    """Raised inside the pipeline when the task's row has been cancelled by the
+    user. A normal outcome, not a failure: the worker aborts, keeps the row's
+    `cancelled` status, and does not retry."""
+
+
 class EventBusError(ResearchAssistantError):
     """Raised by the Redis Pub/Sub publisher/subscriber layer."""
 

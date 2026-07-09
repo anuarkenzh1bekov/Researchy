@@ -207,6 +207,14 @@ def _cmd_show(args) -> int:
     return _guard(lambda: _with_client(lambda c: render.render_report(c.get_task(args.task_id))))
 
 
+def _cmd_cancel(args) -> int:
+    def action(c: ResearchClient):
+        r = c.cancel_task(args.task_id)
+        print(f"task {r.get('id')} → {r.get('status')}")
+
+    return _guard(lambda: _with_client(action))
+
+
 def _cmd_login(args) -> int:
     cfg = config.load()
     if args.url:
@@ -326,6 +334,9 @@ def _build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show", help="show a task's report")
     show.add_argument("task_id")
 
+    cancel = sub.add_parser("cancel", help="cancel a pending/running task")
+    cancel.add_argument("task_id")
+
     login = sub.add_parser("login", help="save API url/key")
     login.add_argument("--url")
     login.add_argument("--key")
@@ -344,6 +355,7 @@ _DISPATCH = {
     "ask": _cmd_ask,
     "history": _cmd_history,
     "show": _cmd_show,
+    "cancel": _cmd_cancel,
     "login": _cmd_login,
     "bot": _cmd_bot,
 }

@@ -27,6 +27,7 @@ from research_assistant.agents.prompts import (
 )
 from research_assistant.agents.schemas import CriticOutput, PlannerOutput
 from research_assistant.agents.state import Finding, ResearcherInput, ResearchState
+from research_assistant.core.exceptions import TaskCancelledError
 from research_assistant.core.logging import get_logger
 from research_assistant.llm.base import LLMProvider, LLMProviderConfig
 from research_assistant.tools.base import ResearchTool, ToolResult
@@ -160,6 +161,10 @@ async def researcher_node(
         }
         await publish("researcher", "completed", {"sub_question": sq, "usage": usage})
         return {"findings": [finding], "usage": usage}
+    except TaskCancelledError:
+        # user cancel (raised by the publish checkpoint) must abort the task,
+        # not be swallowed into a degraded finding.
+        raise
     except Exception as e:
         # Degrade, don't abort: in the parallel Send fan-out a single raising
         # branch sinks the whole superstep (the entire task fails). One

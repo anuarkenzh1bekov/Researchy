@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from research_assistant.agents.graph import build_graph
 from research_assistant.llm.base import LLMProviderConfig
 from research_assistant.tools.base import ToolResult
@@ -89,6 +91,29 @@ async def test_critic_rejection_triggers_one_reresearch_then_synthesizes():
 
     assert result["final_report"] == "FINAL."
     assert result["revision"] >= 1  # critic ran and bumped the counter
+
+
+async def test_cancellation_aborts_instead_of_degrading():
+    """The publish hook is the cancellation checkpoint (tasks/ wraps it to raise
+    TaskCancelledError once the row is cancelled). The Researcher's degrade-don't-
+    abort catch must let cancellation THROUGH — a cancelled task aborting is the
+    point, not a failure to survive."""
+    from research_assistant.core.exceptions import TaskCancelledError
+
+    async def publish(agent_name, event_type, payload):
+        # cancellation lands mid-research, inside the researcher's try block
+        if (agent_name, event_type) == ("researcher", "completed"):
+            raise TaskCancelledError("cancelled by user")
+
+    graph = build_graph(
+        provider=_provider('{"approved": true, "gaps": []}'),
+        tools=[_tool()],
+        publish=publish,
+        max_revisions=2,
+        config=CFG,
+    )
+    with pytest.raises(TaskCancelledError):
+        await graph.ainvoke({"query": "Q"})
 
 
 class _FailingResearcherProvider(RoutingFakeProvider):

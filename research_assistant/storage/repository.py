@@ -1,8 +1,8 @@
 """Repository layer — the ONLY place with SQLModel query code.
 
-ResearchTaskRepository owns all ResearchTask access; AgentEventRepository owns
-AgentEvent (fix #5: events/ persists through this, never touches the session
-directly). Each repo wraps a single AsyncSession passed in by the caller.
+ResearchTaskRepository owns all ResearchTask access. Each repo wraps a single
+AsyncSession passed in by the caller. (Progress events live on the Redis
+Stream, not in Postgres — see events/publisher.)
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ from research_assistant.core.crypto import (
 )
 from research_assistant.core.exceptions import RepositoryError
 from research_assistant.storage.models import (
-    AgentEvent,
     ApiKey,
     ResearchTask,
     SourceType,
@@ -93,11 +92,16 @@ class ResearchTaskRepository:
         status: TaskStatus,
         *,
         error_message: str | None = None,
+        depth: str | None = None,
     ) -> ResearchTask:
+        """`depth` is written by the worker when it marks the task running —
+        the durable record of which effort profile actually ran."""
         task = await self._require(task_id)
         task.status = status
         if error_message is not None:
             task.error_message = error_message
+        if depth is not None:
+            task.depth = depth
         return await self._save(task)
 
     async def save_result(
@@ -140,6 +144,25 @@ class ResearchTaskRepository:
         except SQLAlchemyError as e:
             await self._s.rollback()
             raise RepositoryError(f"fail pending tasks failed: {e}") from e
+
+    async def cancel(self, task_id: uuid.UUID) -> ResearchTask:
+        """Flip a non-terminal task to cancelled with a GUARDED single UPDATE —
+        a worker completing the task between the caller's read and this write
+        wins (done/failed stays), same lazy-race semantics as fail_pending."""
+        try:
+            await self._s.execute(
+                update(ResearchTask)
+                .where(col(ResearchTask.id) == task_id)
+                .where(
+                    col(ResearchTask.status).in_([TaskStatus.pending, TaskStatus.running])
+                )
+                .values(status=TaskStatus.cancelled)
+            )
+            await self._s.commit()
+        except SQLAlchemyError as e:
+            await self._s.rollback()
+            raise RepositoryError(f"cancel research task failed: {e}") from e
+        return await self._require(task_id)
 
     async def save_scrape_report(self, task_id: uuid.UUID, report: list[dict]) -> ResearchTask:
         task = await self._require(task_id)
@@ -234,47 +257,6 @@ class ResearchTaskRepository:
             await self._s.rollback()
             raise RepositoryError(f"save research task failed: {e}") from e
         return task
-
-
-class AgentEventRepository:
-    """Persists the append-only progress log. Used by events/ publisher and by
-    the API SSE route's replay step."""
-
-    def __init__(self, session: AsyncSession) -> None:
-        self._s = session
-
-    async def add(
-        self, *, task_id: uuid.UUID, agent_name: str, event_type: str, payload: dict
-    ) -> AgentEvent:
-        event = AgentEvent(
-            task_id=task_id,
-            agent_name=agent_name,
-            event_type=event_type,
-            payload=payload,
-        )
-        try:
-            self._s.add(event)
-            await self._s.commit()
-            # no refresh: id/created_at are client-side defaults, already set on
-            # the instance, and the sessionmaker is expire_on_commit=False — a
-            # refresh here would add a SELECT round-trip per event for nothing.
-        except SQLAlchemyError as e:
-            await self._s.rollback()
-            raise RepositoryError(f"add agent event failed: {e}") from e
-        return event
-
-    async def list_by_task(self, task_id: uuid.UUID) -> list[AgentEvent]:
-        """Oldest-first — replay order for SSE catch-up (fix #3)."""
-        try:
-            stmt = (
-                select(AgentEvent)
-                .where(AgentEvent.task_id == task_id)
-                .order_by(col(AgentEvent.created_at).asc())
-            )
-            result = await self._s.exec(stmt)
-            return list(result.all())
-        except SQLAlchemyError as e:
-            raise RepositoryError(f"list agent events failed: {e}") from e
 
 
 class TelegramBotConfigRepository:

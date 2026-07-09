@@ -18,7 +18,7 @@ just using it:
   rule: `agents/` never imports `api/`; `tasks/` is the only agents↔storage wiring; clients
   import no server internals).
 - The extension points — every `# EXTENSION:` seam, what it's for, and the one-module change
-  that activates it (per-agent LLM config, embeddings/semantic recall, custom tools/agents,
+  that activates it (per-agent LLM config, custom tools/agents,
   depth profiles through the API path).
 - The two infra modes (`--local` in-process vs full Celery/Postgres/Redis) and why both exist.
 

@@ -30,8 +30,12 @@ class Settings(BaseSettings):
     database_url_async: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/research"
     database_url_sync: str = "postgresql://postgres:postgres@localhost:5432/research"
 
-    # --- redis (celery broker/backend + pub/sub event bus) ---
+    # --- redis (celery broker/backend + event-stream bus) ---
     redis_url: str = "redis://localhost:6379/0"
+    # Per-task event stream bounds: entries kept (MAXLEN ~, a whole run is a few
+    # dozen) and seconds a stream outlives its last event before self-cleaning.
+    event_stream_maxlen: int = 1000
+    event_stream_ttl_seconds: int = 86_400
 
     # --- default LLM (one global default for the MVP; later per-agent/per-task) ---
     llm_provider: str = "litellm"
@@ -81,7 +85,6 @@ class Settings(BaseSettings):
     # or absent Celery worker); API reads flip it to failed instead of showing
     # `pending` forever. 0 disables the check.
     task_pending_timeout_seconds: int = 300
-    embedding_dim: int = 1536
 
     @property
     def celery_broker_url(self) -> str:

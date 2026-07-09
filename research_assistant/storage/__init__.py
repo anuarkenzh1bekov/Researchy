@@ -11,17 +11,13 @@ from research_assistant.storage.db import (
     init_db,
 )
 from research_assistant.storage.models import (
-    AgentEvent,
     LLMAgentConfig,
     ResearchTask,
     SourceType,
     TaskStatus,
     TelegramBotConfig,
 )
-from research_assistant.storage.repository import (
-    AgentEventRepository,
-    ResearchTaskRepository,
-)
+from research_assistant.storage.repository import ResearchTaskRepository
 
 __all__ = [
     "get_engine",
@@ -29,11 +25,9 @@ __all__ = [
     "get_session",
     "init_db",
     "ResearchTask",
-    "AgentEvent",
     "LLMAgentConfig",
     "TelegramBotConfig",
     "SourceType",
     "TaskStatus",
     "ResearchTaskRepository",
-    "AgentEventRepository",
 ]

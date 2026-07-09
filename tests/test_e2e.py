@@ -127,14 +127,14 @@ async def test_full_stack_research_run(e2e_env, monkeypatch):
 
     enqueued: list[str] = []
 
-    def _delay(task_id: str, depth: str | None = None) -> None:
-        # signature must track run_research_task.delay(task_id, depth)
-        enqueued.append(task_id)
+    def _apply_async(args=(), task_id=None) -> None:
+        # signature must track run_research_task.apply_async(args, task_id=...)
+        enqueued.append(args[0])
 
     monkeypatch.setattr(
         # patch where the route imports it from; keep the real task runnable
         "research_assistant.tasks.run_research_task",
-        type("Stub", (), {"delay": staticmethod(_delay)}),
+        type("Stub", (), {"apply_async": staticmethod(_apply_async)}),
     )
 
     app = create_app()
@@ -170,6 +170,7 @@ async def test_full_stack_research_run(e2e_env, monkeypatch):
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "done"
+        assert body["depth"] == "standard"  # resolved profile persisted by the worker
         assert body["final_report"] == _REPORT
         assert body["sources"] and body["sources"][0]["url"] == "https://example.test/paper"
         assert body["sub_questions"] == json.loads(_FAKE_LLM["planner"])["sub_questions"]

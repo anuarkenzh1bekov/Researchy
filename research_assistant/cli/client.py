@@ -66,6 +66,9 @@ class ResearchClient:
     def history(self) -> list:
         return self._ok(self._http.get("/research/history"))  # type: ignore[return-value]
 
+    def cancel_task(self, task_id: str) -> dict:
+        return self._ok(self._http.delete(f"/research/{task_id}"))  # type: ignore[return-value]
+
     def stream_events(self, task_id: str) -> Iterator[dict]:
         """Yield live progress events from the SSE endpoint until it closes."""
         with self._http.stream(

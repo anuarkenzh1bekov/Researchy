@@ -1,21 +1,24 @@
-"""Redis Pub/Sub publisher + append-only DB mirror for agent progress events.
+"""Redis Streams publisher — the SINGLE write path for agent progress events.
+
+One XADD per event; the stream IS the event log. The API's SSE replay, its live
+tail, and the bot all read the same entries, so there is no DB mirror and no
+dual-write skew (the old Pub/Sub + agent_event design could persist without
+publishing or publish without persisting). Stream entry ids double as SSE event
+ids / `Last-Event-ID` cursors. Each per-task stream is capped (MAXLEN ~) and
+expires after a TTL, so abandoned tasks don't accumulate keys forever.
 
 Agent nodes emit started/completed/failed through a bound `publish` closure
 (see `make_publisher`) so agents/ stays unaware of Redis AND of the task_id.
-Each event is BOTH:
-  - persisted to `agent_event` via the repository (fix #3: a client reconnecting
-    mid-task replays from DB before subscribing live), and
-  - published to `research:{task_id}:events` for live SSE/bot subscribers.
-
-Both sides are best-effort: a Redis hiccup or a transient DB error must NOT sink
-the research pipeline (resilience requirement), so failures are logged, not
-raised. redis is imported lazily so importing this module needs no live broker.
+Publishing is best-effort: a Redis hiccup must NOT sink the research pipeline
+(resilience requirement), so failures are logged, not raised. redis is imported
+lazily so importing this module needs no live broker.
 """
 
 from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
@@ -25,9 +28,9 @@ from research_assistant.core.settings import get_settings
 log = get_logger(__name__)
 
 
-def channel(task_id: uuid.UUID | str) -> str:
-    """The per-task Redis channel both sides agree on."""
-    return f"research:{task_id}:events"
+def stream_key(task_id: uuid.UUID | str) -> str:
+    """The per-task stream key both sides agree on."""
+    return f"research:{task_id}:stream"
 
 
 @lru_cache
@@ -42,25 +45,6 @@ def get_redis():
     return Redis.from_url(get_settings().redis_url, decode_responses=True)
 
 
-async def _persist(
-    task_id: uuid.UUID, agent_name: str, event_type: str, payload: dict
-):
-    # events/ persists ONLY through the repository — never touches the session
-    # for these tables directly (fix #5). Own short-lived session per event.
-    # Returns the stored row so its id/created_at can ride along on the live
-    # message (lets a subscriber dedupe replay-vs-live later).
-    from research_assistant.storage.db import get_sessionmaker
-    from research_assistant.storage.repository import AgentEventRepository
-
-    async with get_sessionmaker()() as session:
-        return await AgentEventRepository(session).add(
-            task_id=task_id,
-            agent_name=agent_name,
-            event_type=event_type,
-            payload=payload,
-        )
-
-
 async def publish_event(
     task_id: uuid.UUID,
     *,
@@ -68,33 +52,30 @@ async def publish_event(
     event_type: str,
     payload: dict[str, Any],
 ) -> None:
-    """Mirror one progress event to the DB log and the live channel.
+    """Append one progress event to the task's stream.
 
-    Persist first (durable replay log), then publish (ephemeral). Each step is
-    independently best-effort so neither a dead broker nor a slow DB can fail
-    the node that called us.
-    """
-    # Persist first so the live message can carry the durable event id/timestamp
-    # (None if the persist failed — publishing is still best-effort).
-    event_id: str | None = None
-    created_at: str | None = None
-    try:
-        record = await _persist(task_id, agent_name, event_type, payload)
-        event_id = str(record.id)
-        created_at = record.created_at.isoformat()
-    except Exception as e:  # noqa: BLE001 — best-effort log, never propagate
-        log.warning("event_persist_failed", agent=agent_name, type=event_type, error=str(e))
-
+    The entry id Redis assigns is the event's durable identity — readers stamp
+    it onto the decoded event as `event_id` (see subscriber.read_events)."""
+    settings = get_settings()
     event = {
-        "event_id": event_id,
-        "created_at": created_at,
         "task_id": str(task_id),
         "agent_name": agent_name,
         "event_type": event_type,
         "payload": payload,
+        "created_at": datetime.now(UTC).isoformat(),
     }
     try:
-        await get_redis().publish(channel(task_id), json.dumps(event))
+        redis = get_redis()
+        key = stream_key(task_id)
+        await redis.xadd(
+            key,
+            {"event": json.dumps(event)},
+            maxlen=settings.event_stream_maxlen,
+            approximate=True,  # let Redis trim on macro-node boundaries (cheap)
+        )
+        # refresh on every append: the stream lives TTL past the LAST event,
+        # long enough for reconnect/replay, then cleans itself up.
+        await redis.expire(key, settings.event_stream_ttl_seconds)
     except Exception as e:  # noqa: BLE001 — best-effort log, never propagate
         log.warning("event_publish_failed", agent=agent_name, type=event_type, error=str(e))
 

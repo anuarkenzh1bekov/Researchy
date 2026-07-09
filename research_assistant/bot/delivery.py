@@ -82,6 +82,9 @@ async def _await_and_render(task_id: uuid.UUID, placeholder, fmt: str = "md") ->
                     "❌ Research failed while running. Please try again."
                 )
                 return
+            if event["event_type"] == "cancelled":
+                await placeholder.edit_text("🚫 Research cancelled.")
+                return
             if event["agent_name"] == "synthesizer" and event["event_type"] == "completed":
                 async with get_sessionmaker()() as session:
                     task = await ResearchTaskRepository(session).get(task_id)

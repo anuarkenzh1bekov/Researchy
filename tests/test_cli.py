@@ -89,6 +89,25 @@ def test_create_research_sends_depth():
     assert "depth" not in bodies[1]
 
 
+def test_cancel_task_sends_delete():
+    """`research cancel <id>` rides as DELETE /research/{id}."""
+    import httpx
+
+    from research_assistant.cli.client import ResearchClient
+
+    requests: list[tuple[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json={"id": "x", "status": "cancelled"})
+
+    client = ResearchClient(config.Config(base_url="http://test"))
+    client._http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://test")
+    out = client.cancel_task("abc")
+    assert requests == [("DELETE", "/research/abc")]
+    assert out["status"] == "cancelled"
+
+
 # --- follow-up detection -----------------------------------------------------
 
 

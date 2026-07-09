@@ -16,10 +16,12 @@ stays unaware of all three.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import selectors
 import sys
 import uuid
 
+from research_assistant.core.exceptions import TaskCancelledError
 from research_assistant.core.logging import configure_logging, get_logger
 from research_assistant.core.settings import get_settings
 from research_assistant.tasks.celery_app import celery_app
@@ -61,7 +63,10 @@ def _run(coro):
             )
         else:
             _runner = asyncio.Runner()
-    return _runner.run(coro)
+    # Fresh context per run: the Runner snapshots ONE contextvars context at
+    # first use and replays it for every .run() — per-task binds made outside
+    # (structlog task_id) would be invisible from the second task on.
+    return _runner.run(coro, context=contextvars.copy_context())
 
 
 async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
@@ -79,28 +84,37 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
     from research_assistant.storage.repository import ResearchTaskRepository
     from research_assistant.tools import get_tools
 
-    # 1. load + mark running
+    # Depth profile scales the three effort levers together (sub-questions,
+    # sources per sub-question, Critic->Researcher rounds). Falls back to the
+    # default profile when the caller passes no depth. Resolved BEFORE the
+    # mark-running write so the row records which profile actually ran.
+    profile = get_profile(depth)
+
+    # 1. load + mark running (+ persist the resolved depth for history)
     async with get_sessionmaker()() as session:
         repo = ResearchTaskRepository(session)
         task = await repo.get(task_id)
         if task is None:
             raise TaskExecutionError(f"research task {task_id} not found")
-        await repo.update_status(task_id, TaskStatus.running)
+        if task.status == TaskStatus.cancelled:
+            # cancelled while queued and the revoke didn't stop delivery —
+            # don't resurrect it into `running`.
+            raise TaskCancelledError(f"research task {task_id} was cancelled")
+        await repo.update_status(task_id, TaskStatus.running, depth=profile.name)
         query = task.query
         urls = task.source_urls
         draft = task.draft_text
         docs = task.source_docs
 
     # 2. wire dependencies (injected — agents import none of these)
-    # Depth profile scales the three effort levers together (sub-questions,
-    # sources per sub-question, Critic->Researcher rounds). Falls back to the
-    # default profile when the caller passes no depth.
-    profile = get_profile(depth)
     settings = get_settings()
     config = config_from_settings()
     provider = get_provider(config)
     tools = get_tools()
-    publish = make_publisher(task_id)
+    # The publish hook doubles as the cancellation checkpoint: every node calls
+    # it at start/end, so a DELETE'd task aborts within one node of the flip —
+    # no polling loop, no extra plumbing into agents/.
+    publish = _cancel_checkpoint(make_publisher(task_id), task_id)
 
     # 2b. user-supplied sites + documents: prepare eagerly BEFORE the graph (the
     # parallel researcher fan-out would race a lazy first fetch), persist the
@@ -156,6 +170,29 @@ async def _run_pipeline(task_id: uuid.UUID, depth: str | None = None) -> None:
     log.info("research_task_done", task_id=str(task_id))
 
 
+async def _is_cancelled(task_id: uuid.UUID) -> bool:
+    from research_assistant.storage.db import get_sessionmaker
+    from research_assistant.storage.models import TaskStatus
+    from research_assistant.storage.repository import ResearchTaskRepository
+
+    async with get_sessionmaker()() as session:
+        task = await ResearchTaskRepository(session).get(task_id)
+    return task is not None and task.status == TaskStatus.cancelled
+
+
+def _cancel_checkpoint(publish, task_id: uuid.UUID):
+    """Wrap the publisher so each node's progress event first checks whether
+    the user cancelled the task; if so, abort the pipeline via
+    TaskCancelledError (one cheap SELECT per event — a handful per run)."""
+
+    async def checked(agent_name: str, event_type: str, payload: dict) -> None:
+        if await _is_cancelled(task_id):
+            raise TaskCancelledError(f"research task {task_id} was cancelled")
+        await publish(agent_name, event_type, payload)
+
+    return checked
+
+
 async def _mark_failed(task_id: uuid.UUID, message: str) -> None:
     from research_assistant.storage.db import get_sessionmaker
     from research_assistant.storage.models import TaskStatus
@@ -196,13 +233,24 @@ def run_research_task(self, task_id: str, depth: str | None = None):
     per attempt). Re-raises so Celery's retry/ack machinery sees the failure.
 
     `depth` (quick | standard | deep) selects the pipeline effort profile; None
-    falls back to the default profile. It rides as a task argument rather than a
-    ResearchTask column so no schema migration is needed.
-    # EXTENSION: persist depth on the task row for history/reproducibility."""
+    falls back to the default profile. The resolved profile name is persisted on
+    the task row at mark-running time (history/reproducibility)."""
+    import structlog
+
     configure_logging()
+    # Bind the task identity once; merge_contextvars puts it on every log line
+    # the pipeline emits from here on. clear first — the worker loop reuses one
+    # process (and one contextvar context under --pool=solo) across tasks.
+    structlog.contextvars.clear_contextvars()
+    structlog.contextvars.bind_contextvars(task_id=task_id)
     tid = uuid.UUID(task_id)
     try:
         _run(_run_pipeline(tid, depth))
+    except TaskCancelledError:
+        # user cancel is a normal outcome: the row already says `cancelled`,
+        # so don't overwrite it with `failed` and don't feed Celery's retries.
+        log.info("research_task_cancelled", task_id=task_id)
+        return
     except _TRANSIENT as exc:
         log.warning("research_task_transient", task_id=task_id, error=str(exc))
         if self.request.retries < self.max_retries:

@@ -1,10 +1,8 @@
-"""SQLModel tables. One database (Postgres + pgvector) for relational data AND
-future embeddings.
+"""SQLModel tables.
 
 Schema already accommodates the not-yet-built extensions so they need no
 migration later:
-  - ResearchTask.embedding  -> semantic recall (# EXTENSION)
-  - LLMAgentConfig table     -> per-agent/per-task LLM config (# EXTENSION, unused)
+  - LLMAgentConfig table -> per-agent/per-task LLM config (# EXTENSION, unused)
 JSONB columns (sub_questions/sources/payload/extra_params) absorb shape changes
 without ALTERs.
 """
@@ -15,14 +13,9 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, DateTime, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
-
-from research_assistant.core.settings import get_settings
-
-_EMBEDDING_DIM = get_settings().embedding_dim
 
 
 def _now() -> datetime:
@@ -47,6 +40,7 @@ class TaskStatus(StrEnum):
     running = "running"
     done = "done"
     failed = "failed"
+    cancelled = "cancelled"
 
 
 class ResearchTask(SQLModel, table=True):
@@ -59,6 +53,10 @@ class ResearchTask(SQLModel, table=True):
     source: SourceType = Field(default=SourceType.web, sa_column=Column(String))
     query: str
     status: TaskStatus = Field(default=TaskStatus.pending, sa_column=Column(String, index=True))
+    # Resolved depth profile name (quick|standard|deep), written by the worker
+    # when it picks the task up — the record of what effort level actually ran.
+    # Nullable: tasks that never started (or predate the column) have none.
+    depth: str | None = None
 
     sub_questions: list = Field(default_factory=list, sa_column=Column(JSONB))
     final_report: str | None = None
@@ -75,30 +73,9 @@ class ResearchTask(SQLModel, table=True):
     completion_tokens: int = 0
     total_tokens: int = 0
 
-    # EXTENSION: semantic recall. Nullable, unused by the MVP pipeline; present
-    # so memory/recall is a query addition, not a schema migration.
-    embedding: list[float] | None = Field(
-        default=None, sa_column=Column(Vector(_EMBEDDING_DIM), nullable=True)
-    )
-
     error_message: str | None = None
     created_at: datetime = Field(default_factory=_now, sa_column=_ts_column())
     updated_at: datetime = Field(default_factory=_now, sa_column=_ts_column(onupdate=_now))
-
-
-class AgentEvent(SQLModel, table=True):
-    """Append-only mirror of what's published to Redis. Lets a client that
-    reconnects mid-task replay progress from DB before subscribing live
-    (see fix #3, SSE route)."""
-
-    __tablename__ = "agent_event"
-
-    id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    task_id: uuid.UUID = Field(index=True)
-    agent_name: str
-    event_type: str  # started | completed | failed
-    payload: dict = Field(default_factory=dict, sa_column=Column(JSONB))
-    created_at: datetime = Field(default_factory=_now, sa_column=_ts_column(index=True))
 
 
 class LLMAgentConfig(SQLModel):

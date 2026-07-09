@@ -13,7 +13,7 @@ Decompose → research in parallel → critique for gaps → synthesize. Orchest
 ![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
 ![LangGraph](https://img.shields.io/badge/LangGraph-orchestration-1C3C3C)
 ![Celery](https://img.shields.io/badge/Celery-durable%20tasks-37814A?logo=celery&logoColor=white)
-![Postgres](https://img.shields.io/badge/Postgres-pgvector-4169E1?logo=postgresql&logoColor=white)
+![Postgres](https://img.shields.io/badge/Postgres-storage-4169E1?logo=postgresql&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 [Quick start](#-quick-start) · [Features](#-key-features) · [Architecture](#-architecture) · [CLI](#-cli-client) · [Security](#-security)
@@ -52,8 +52,10 @@ Synthesizer keeps the strong one.
 checkpointing means a crashed worker resumes from the last completed node instead of
 restarting the whole run.
 
-**4. Real-time progress.** Workers publish to Redis Pub/Sub; FastAPI relays it to clients
-over SSE. You watch Planner → Researchers → Critic → Synthesizer advance live.
+**4. Real-time progress.** Workers append to a per-task Redis Stream; FastAPI relays it to
+clients over SSE. You watch Planner → Researchers → Critic → Synthesizer advance live, a
+dropped client resumes exactly where it left off (`Last-Event-ID`), and a running task can
+be cancelled mid-flight (`DELETE /research/{id}` / `research cancel`).
 
 **5. Global citations.** Each Researcher's local `[n]` references are renumbered into one
 report-wide scheme, so the inline `[n]` in the prose always match the final Sources list.
@@ -93,8 +95,8 @@ Planner → [Researcher × N, parallel via Send] → Critic ─┬─ approved /
 | **Orchestration** | LangGraph `StateGraph`; fan-out to Researchers via `Send`                   |
 | **LLM access**    | LiteLLM behind an `LLMProvider` Protocol (cloud + local, one interface)     |
 | **Durability**    | Celery `task_acks_late` + retries, LangGraph `PostgresSaver` checkpoints    |
-| **Real-time**     | Redis Pub/Sub from workers → FastAPI SSE to clients                         |
-| **Storage**       | PostgreSQL + pgvector (relational today, embeddings reserved)               |
+| **Real-time**     | Per-task Redis Stream from workers → FastAPI SSE (resumable via `Last-Event-ID`) |
+| **Storage**       | PostgreSQL (tasks, reports, API keys; JSONB absorbs the flexible shapes)    |
 | **Tools**         | `ResearchTool` Protocol → Tavily (web) + arXiv (academic)                   |
 
 Two Postgres URLs on purpose: async (`asyncpg`) for the app, sync (`psycopg`) for
@@ -110,7 +112,7 @@ research_assistant/
 ├── storage/  # SQLModel models, async engine/session, repository layer
 ├── tools/    # ResearchTool Protocol + Tavily and Arxiv implementations
 ├── agents/   # Planner/Researcher/Critic/Synthesizer + graph state + StateGraph
-├── events/   # Redis Pub/Sub publisher (agents) + subscriber (API SSE / bot)
+├── events/   # Redis Streams publisher (agents) + reader (API SSE / bot)
 ├── tasks/    # Celery app + run_research_task (the only agents↔storage wiring)
 ├── api/      # FastAPI app: research CRUD + SSE + bot connect/disconnect/status
 ├── export/   # report files: md/docx/pdf renderer + LaTeX/APA paper emitter
@@ -135,7 +137,7 @@ and a Celery worker:
 > in their own windows. `.\scripts\dev.ps1 -Stop` tears it all down.
 
 ```bash
-# 1. infra - Postgres + pgvector, Redis
+# 1. infra - Postgres, Redis
 docker compose up -d
 
 # 2. deps  (Python 3.11 / 3.12)
@@ -203,6 +205,7 @@ research ask "how does pgvector affect RAG latency?"   # one-shot, live-streamed
 research ask "extend my survey" --draft draft.md --url https://site.test/docs  # your sources
 research history                   # your past tasks
 research show <id>                 # a task's report
+research cancel <id>               # cancel a pending/running task
 research bot connect <bot_token>   # attach a Telegram bot via the same API
 ```
 
@@ -328,15 +331,14 @@ four answers. Two unauthenticated endpoints cover them:
   (default 300; `0` disables) flips to `failed` on read with a plain-English reason, and its
   SSE stream emits a terminal event instead of waiting forever.
 
-Intentionally out of scope: full OpenTelemetry tracing (the per-agent `agent_event` log
-already carries timestamps per pipeline stage - a documented seam, not built).
+Intentionally out of scope: full OpenTelemetry tracing (the per-task event stream already
+carries timestamps per pipeline stage - a documented seam, not built).
 
 ## 🗺️ Roadmap
 
 Schema + module seams already accommodate these as one-module additions - see `# EXTENSION:`
 comments in code; no schema migration required:
 
-- Session memory / semantic recall (`ResearchTask.embedding` pgvector column)
 - Custom user-defined agents (`LLMAgentConfig` schema sketch - flip `table=True` to enable)
 - Confidence scoring on findings
 

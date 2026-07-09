@@ -56,6 +56,7 @@ class TaskView(BaseModel):
     source: str
     query: str
     status: str
+    depth: str | None = None
     sub_questions: list = []
     final_report: str | None = None
     sources: list = []
@@ -78,6 +79,7 @@ class TaskView(BaseModel):
             source=task.source.value if hasattr(task.source, "value") else task.source,
             query=task.query,
             status=task.status.value if hasattr(task.status, "value") else task.status,
+            depth=getattr(task, "depth", None),
             sub_questions=task.sub_questions or [],
             final_report=task.final_report,
             sources=task.sources or [],
@@ -104,6 +106,7 @@ class TaskSummaryView(BaseModel):
     source: str
     query: str
     status: str
+    depth: str | None = None
     has_report: bool = False
     total_tokens: int = 0
     error_message: str | None = None
@@ -118,6 +121,7 @@ class TaskSummaryView(BaseModel):
             source=task.source.value if hasattr(task.source, "value") else task.source,
             query=task.query,
             status=task.status.value if hasattr(task.status, "value") else task.status,
+            depth=getattr(task, "depth", None),
             has_report=bool(task.final_report),
             total_tokens=getattr(task, "total_tokens", 0) or 0,
             error_message=task.error_message,

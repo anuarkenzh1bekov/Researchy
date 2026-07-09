@@ -251,7 +251,9 @@ def build_router():
             await callback.answer("Already running — hang tight.")
             return
 
-        run_research_task.delay(str(task_id), depth)
+        # Celery message id == row id, same as the API path — lets DELETE
+        # /research/{id} revoke a still-queued task.
+        run_research_task.apply_async(args=(str(task_id), depth), task_id=str(task_id))
 
         # Replace the chooser with a live status line; that same message becomes
         # the placeholder delivery edits into the final report.

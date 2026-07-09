@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from functools import lru_cache
 
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 from sqlmodel import SQLModel
 
@@ -46,7 +45,7 @@ async def get_session() -> AsyncIterator[AsyncSession]:
 
 
 async def init_db() -> None:
-    """Local-dev convenience: ensure pgvector extension + create tables.
+    """Local-dev convenience: create tables.
 
     Runs ONLY when app_env == "local" (zero-friction `docker compose up` +
     start). Everywhere else the schema is owned by Alembic — run
@@ -60,5 +59,4 @@ async def init_db() -> None:
     from research_assistant.storage import models  # noqa: F401
 
     async with get_engine().begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(SQLModel.metadata.create_all)
