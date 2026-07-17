@@ -222,6 +222,7 @@ def _cmd_ask(args) -> int:
     query = args.query
     interview = getattr(args, "interview", False) and _tty()
 
+    depth = args.depth
     if args.local:
         if interview:
             from research_assistant.cli.local import run_clarify_local
@@ -230,23 +231,27 @@ def _cmd_ask(args) -> int:
                 query,
                 get_questions=lambda t: run_clarify_local(t, draft),
                 ask_line=_ask_line,
+                default_depth=args.depth or "standard",
             )
             query, urls, source_docs = _merge_interview(res, urls, source_docs)
+            depth = res.depth
         return _run_local(
-            query, args.depth, args.format,
+            query, depth, args.format,
             urls=urls, draft=draft, source_docs=source_docs,
         )
 
     def action(c: ResearchClient) -> None:
-        q, u, docs = query, urls, source_docs
+        q, u, docs, d = query, urls, source_docs, depth
         if interview:
             res = run_interview(
                 q,
                 get_questions=lambda t: _clarify_via_api(c, t, draft),
                 ask_line=_ask_line,
+                default_depth=args.depth or "standard",
             )
             q, u, docs = _merge_interview(res, u, docs)
-        _run_research(c, q, args.format, args.depth, urls=u, draft=draft, source_docs=docs)
+            d = res.depth
+        _run_research(c, q, args.format, d, urls=u, draft=draft, source_docs=docs)
 
     return _guard(lambda: _with_client(action))
 
@@ -340,7 +345,7 @@ def _research_with_interview(client: ResearchClient, topic: str) -> None:
         ask_line=_ask_line,
     )
     _run_research(
-        client, res.query,
+        client, res.query, depth=res.depth,
         urls=res.urls or None, source_docs=res.source_docs or None,
     )
 

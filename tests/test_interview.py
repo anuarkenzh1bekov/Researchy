@@ -56,32 +56,48 @@ def test_run_interview_gathers_query_and_urls():
     res = run_interview(
         "remote work",
         get_questions=lambda _t: ["Region?", "Audience?"],
-        ask_line=_scripted(["EU", "managers", "https://a.test https://b.test", ""]),
+        # answers, urls, files, depth
+        ask_line=_scripted(["EU", "managers", "https://a.test https://b.test", "", "deep"]),
         emit=lambda _m: None,
     )
     assert "EU" in res.query and "managers" in res.query
     assert res.urls == ["https://a.test", "https://b.test"]
     assert res.source_docs == []
+    assert res.depth == "deep"
 
 
-def test_run_interview_all_skipped_yields_bare_topic():
+def test_run_interview_all_skipped_yields_bare_topic_and_default_depth():
     res = run_interview(
         "just the topic",
         get_questions=lambda _t: ["Q1?"],
-        ask_line=_scripted(["", "", ""]),  # answer, urls, files all blank
+        ask_line=_scripted(["", "", "", ""]),  # answer, urls, files, depth all blank
         emit=lambda _m: None,
     )
     assert res.query == "just the topic"
     assert res.urls == []
     assert res.source_docs == []
+    assert res.depth == "standard"  # blank keeps the default
 
 
 def test_run_interview_no_questions_still_asks_for_sources():
     res = run_interview(
         "topic",
         get_questions=lambda _t: [],  # model had nothing to ask
-        ask_line=_scripted(["https://only.test", ""]),
+        ask_line=_scripted(["https://only.test", "", ""]),  # urls, files, depth
         emit=lambda _m: None,
     )
     assert res.query == "topic"
     assert res.urls == ["https://only.test"]
+
+
+def test_run_interview_invalid_depth_falls_back_to_default():
+    notices: list[str] = []
+    res = run_interview(
+        "topic",
+        get_questions=lambda _t: [],
+        ask_line=_scripted(["", "", "turbo"]),  # urls, files, bogus depth
+        emit=notices.append,
+        default_depth="quick",
+    )
+    assert res.depth == "quick"
+    assert any("isn't a depth" in n for n in notices)

@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 from research_assistant.agents.clarify import compose_query_with_context
 
 _MAX_URLS = 5
+_DEPTHS = ("quick", "standard", "deep")
+_DEFAULT_DEPTH = "standard"
 
 
 @dataclass
@@ -23,6 +25,7 @@ class InterviewResult:
     query: str
     urls: list[str] = field(default_factory=list)
     source_docs: list[dict] = field(default_factory=list)
+    depth: str = _DEFAULT_DEPTH
 
 
 def parse_urls(line: str) -> list[str]:
@@ -62,19 +65,34 @@ def _collect_files(line: str, emit: Callable[[str], None]) -> list[dict]:
     return docs
 
 
+def _ask_depth(ask_line: Callable[[str], str], emit: Callable[[str], None], default: str) -> str:
+    """Ask for the research depth; blank keeps the default, an unrecognised
+    answer falls back to it with a note."""
+    raw = ask_line(f"How deep? quick / standard / deep (Enter = {default})").strip().lower()
+    if not raw:
+        return default
+    if raw in _DEPTHS:
+        return raw
+    emit(f"'{raw}' isn't a depth — using {default}.")
+    return default
+
+
 def run_interview(
     topic: str,
     *,
     get_questions: Callable[[str], list[str]],
     ask_line: Callable[[str], str],
     emit: Callable[[str], None] = print,
+    default_depth: str = _DEFAULT_DEPTH,
 ) -> InterviewResult:
-    """Interview the user about `topic`; return the enriched query + sources.
+    """Interview the user about `topic`; return the enriched query + sources +
+    depth.
 
     `get_questions` fetches clarifying questions (API or local); `ask_line` reads
     one line given a prompt; `emit` shows notices. Every step is skippable with a
-    blank line — an all-skipped interview yields the bare topic and no sources,
-    identical to a plain ask."""
+    blank line — an all-skipped interview yields the bare topic, no sources, and
+    `default_depth`, identical to a plain ask at that depth."""
+    default_depth = default_depth if default_depth in _DEPTHS else _DEFAULT_DEPTH
     emit("A few quick questions to focus the research (press Enter to skip any):")
     qa: list[tuple[str, str]] = []
     for q in get_questions(topic):
@@ -94,4 +112,6 @@ def run_interview(
     if source_docs:
         emit(f"→ {len(source_docs)} file(s) attached as sources.")
 
-    return InterviewResult(query=query, urls=urls, source_docs=source_docs)
+    depth = _ask_depth(ask_line, emit, default_depth)
+
+    return InterviewResult(query=query, urls=urls, source_docs=source_docs, depth=depth)
