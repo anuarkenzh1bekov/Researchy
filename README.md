@@ -245,6 +245,9 @@ article the paper should *cite* — vs `--draft`, which it *builds on* — and r
 `POST /research` as `source_docs`. In Telegram, paste URLs inside the question text; a
 document sent with the question as its caption asks "📝 My draft / 📚 Source material",
 and extra documents sent while the task is still pending attach as sources automatically.
+A fresh topic also triggers the **interview**: the bot replies with a few AI-generated
+clarifying questions (stored on the task, so no in-memory session) and a Skip button — your
+next message is folded into the query before the depth chooser, or Skip goes straight there.
 
 On Windows you can skip `pip install` and use the `research.cmd` wrapper in the repo root
 (`research ask "..."`); it forwards to `python -m research_assistant.cli`.
