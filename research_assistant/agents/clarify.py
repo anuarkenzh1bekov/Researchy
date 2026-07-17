@@ -63,3 +63,20 @@ def compose_query_with_context(topic: str, qa_pairs: list[tuple[str, str]]) -> s
         "Clarifying context (use it to focus the research; it is not a source "
         f"to cite):\n{lines}"
     )
+
+
+def compose_query_with_reply(topic: str, questions: list[str], reply: str) -> str:
+    """Fold a single free-text reply into the query — the bot's one-message
+    variant (the user answers all the clarifying questions at once, so there are
+    no per-question pairs to zip). A blank reply returns the topic unchanged."""
+    reply = (reply or "").strip()
+    if not reply:
+        return topic
+    asked = "\n".join(f"- {q}" for q in questions if q and q.strip())
+    block = f"Questions asked:\n{asked}\n" if asked else ""
+    return (
+        f"{topic}\n\n"
+        "Clarifying context (the user was asked to add focus and replied; use it "
+        f"to focus the research, it is not a source to cite):\n{block}"
+        f"User's reply: {reply}"
+    )

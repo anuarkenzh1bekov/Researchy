@@ -9,6 +9,7 @@ import pytest
 from research_assistant.agents.clarify import (
     MAX_QUESTIONS,
     compose_query_with_context,
+    compose_query_with_reply,
     generate_clarifying_questions,
 )
 from research_assistant.agents.prompts import _clarifier_messages
@@ -91,3 +92,19 @@ def test_compose_all_skipped_returns_topic_unchanged():
 
 def test_compose_no_pairs_returns_topic_unchanged():
     assert compose_query_with_context("topic", []) == "topic"
+
+
+# --- single-reply folding (bot) ----------------------------------------------
+
+
+def test_compose_reply_includes_questions_and_answer():
+    out = compose_query_with_reply(
+        "remote work", ["Which region?", "Which roles?"], "EU, engineers"
+    )
+    assert out.startswith("remote work")
+    assert "Which region?" in out and "Which roles?" in out
+    assert "EU, engineers" in out
+
+
+def test_compose_reply_blank_returns_topic_unchanged():
+    assert compose_query_with_reply("topic", ["Q?"], "   ") == "topic"

@@ -62,6 +62,11 @@ class ResearchTask(SQLModel, table=True):
     final_report: str | None = None
     sources: list = Field(default_factory=list, sa_column=Column(JSONB))
 
+    # Interview intake (bot): clarifying questions asked before research runs.
+    # Non-null = the task is still awaiting the user's one-message reply; cleared
+    # to null once answered or skipped, after which it's a normal pending task.
+    clarify_questions: list | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
+
     # user-supplied research material (web scraper + draft features)
     source_urls: list | None = Field(default=None, sa_column=Column(JSONB, nullable=True))
     scrape_report: list | None = Field(default=None, sa_column=Column(JSONB, nullable=True))

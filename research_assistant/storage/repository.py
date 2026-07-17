@@ -45,11 +45,15 @@ class ResearchTaskRepository:
         urls: list[str] | None = None,
         draft: str | None = None,
         source_docs: list | None = None,
+        clarify_questions: list | None = None,
     ) -> ResearchTask:
-        """urls/draft/source_docs are user-supplied research material."""
+        """urls/draft/source_docs are user-supplied research material.
+        clarify_questions (bot interview) marks the task as awaiting the user's
+        reply to those questions — see resolve_clarification."""
         task = ResearchTask(
             user_id=user_id, query=query, source=source,
             source_urls=urls, draft_text=draft, source_docs=source_docs,
+            clarify_questions=clarify_questions,
         )
         try:
             self._s.add(task)
@@ -183,6 +187,38 @@ class ResearchTaskRepository:
             return result.first()
         except SQLAlchemyError as e:
             raise RepositoryError(f"latest pending task failed: {e}") from e
+
+    async def latest_awaiting_clarification_by_user(self, user_id: str) -> ResearchTask | None:
+        """Newest pending task still awaiting the user's reply to the interview
+        questions (clarify_questions not yet cleared). The bot treats the user's
+        next text message as answers to THIS task — the interview twin of
+        latest_pending_by_user, kept distinct so a normal pending task (awaiting
+        a depth tap) isn't mistaken for one awaiting answers."""
+        try:
+            stmt = (
+                select(ResearchTask)
+                .where(ResearchTask.user_id == user_id)
+                .where(ResearchTask.status == TaskStatus.pending)
+                .where(col(ResearchTask.clarify_questions).isnot(None))
+                .order_by(col(ResearchTask.created_at).desc())
+                .limit(1)
+            )
+            result = await self._s.exec(stmt)
+            return result.first()
+        except SQLAlchemyError as e:
+            raise RepositoryError(f"latest awaiting-clarification task failed: {e}") from e
+
+    async def resolve_clarification(
+        self, task_id: uuid.UUID, *, query: str | None = None
+    ) -> ResearchTask:
+        """Close the interview: clear clarify_questions so the task reads as a
+        normal pending task. Pass the enriched `query` when the user answered;
+        omit it on skip (the original topic stands)."""
+        task = await self._require(task_id)
+        if query is not None:
+            task.query = query
+        task.clarify_questions = None
+        return await self._save(task)
 
     async def resolve_document_role(
         self, task_id: uuid.UUID, *, keep: Literal["draft", "source"]

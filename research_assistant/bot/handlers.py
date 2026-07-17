@@ -124,9 +124,25 @@ def build_router():
 
     @router.message(F.text)
     async def on_text(message: Message) -> None:
-        """Persist the question as a pending task and ask which depth to run it
-        at. The task is created now (so its id can ride in the buttons' callback
-        data) but only ENQUEUED once the user taps a depth — see on_depth."""
+        """A text message is either a reply to the interview questions or a fresh
+        topic.
+
+        - REPLY: if the user's newest pending task is still awaiting clarifying
+          answers, this message IS those answers — fold them into the query and
+          move on to the depth chooser (this is how the interview keeps state
+          without an in-memory session, mirroring the follow-up-document flow).
+        - FRESH: ask the model for a few clarifying questions; if it has any,
+          store them on the task and show them (reply-or-Skip). If not (or the
+          call failed), fall straight through to the depth chooser as before.
+
+        The task is created now (so its id can ride in callback data) but only
+        ENQUEUED once the user taps a depth — see on_depth."""
+        from research_assistant.agents.clarify import (
+            compose_query_with_reply,
+            generate_clarifying_questions,
+        )
+        from research_assistant.bot.keyboards import clarify_skip_keyboard
+        from research_assistant.llm.factory import config_from_settings, get_provider
         from research_assistant.storage.db import get_sessionmaker
         from research_assistant.storage.models import SourceType
         from research_assistant.storage.repository import ResearchTaskRepository
@@ -135,21 +151,90 @@ def build_router():
             return
         user_id = f"telegram:{message.from_user.id}"
         text = message.text or ""
+
+        # 1. A reply to a pending interview? Fold it in and go to depth.
+        async with get_sessionmaker()() as session:
+            repo = ResearchTaskRepository(session)
+            awaiting = await repo.latest_awaiting_clarification_by_user(user_id)
+            if awaiting is not None:
+                enriched = compose_query_with_reply(
+                    awaiting.query, awaiting.clarify_questions or [], text
+                )
+                await repo.resolve_clarification(awaiting.id, query=enriched)
+                await message.answer(
+                    "Thanks — that helps me focus. How deep should I go?\n"
+                    "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
+                    reply_markup=depth_keyboard(awaiting.id),
+                )
+                return
+
+        # 2. A fresh topic. Strip URLs so the planner sees a clean question.
         urls = _URL_RE.findall(text)[:_MAX_URLS]
-        # strip the URLs out of the query so the planner sees a clean question
         query = _URL_RE.sub("", text).strip() or text
+
+        # Interview: ask for clarifying questions (best-effort — a failure yields
+        # none and the flow degrades to the plain depth chooser).
+        config = config_from_settings("planner")
+        questions = await generate_clarifying_questions(
+            get_provider(config), query, config=config
+        )
 
         async with get_sessionmaker()() as session:
             task = await ResearchTaskRepository(session).create(
                 user_id=user_id, query=query, source=SourceType.telegram,
-                urls=urls or None,
+                urls=urls or None, clarify_questions=questions or None,
             )
         note = f"🔗 {len(urls)} site(s) will be scraped as sources.\n" if urls else ""
-        await message.answer(
-            f"{note}How deep should I go?\n"
+        if questions:
+            lines = "\n".join(f"{i}. {q}" for i, q in enumerate(questions, 1))
+            await message.answer(
+                f"{note}📝 A few quick questions to focus the research — reply in "
+                f"one message (answer what you can), or tap Skip:\n\n{lines}",
+                reply_markup=clarify_skip_keyboard(task.id),
+            )
+        else:
+            await message.answer(
+                f"{note}How deep should I go?\n"
+                "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
+                reply_markup=depth_keyboard(task.id),
+            )
+
+    @router.callback_query(F.data.startswith("clarify:"))
+    async def on_clarify_skip(callback) -> None:
+        """A Skip tap under the interview questions: clear the pending questions
+        (the topic stands) and move to the depth chooser. Guarded so a stale tap
+        can't re-open the flow."""
+        from research_assistant.storage.db import get_sessionmaker
+        from research_assistant.storage.models import TaskStatus
+        from research_assistant.storage.repository import ResearchTaskRepository
+
+        try:
+            _, action, tid = (callback.data or "").split(":", 2)
+            task_id = uuid.UUID(tid)
+        except ValueError:
+            await callback.answer()
+            return
+        if action != "skip":
+            await callback.answer()
+            return
+
+        async with get_sessionmaker()() as session:
+            repo = ResearchTaskRepository(session)
+            task = await repo.get(task_id)
+            if task is None:
+                await callback.answer("This question is no longer available.", show_alert=True)
+                return
+            if task.status != TaskStatus.pending:
+                await callback.answer("Already running — hang tight.")
+                return
+            await repo.resolve_clarification(task_id, query=None)
+
+        await callback.message.edit_text(
+            "No problem. How deep should I go?\n"
             "⚡ Quick · 🔍 Standard · 🧠 Deep (more sources, slower)",
-            reply_markup=depth_keyboard(task.id),
+            reply_markup=depth_keyboard(task_id),
         )
+        await callback.answer()
 
     @router.callback_query(F.data.startswith("depth:"))
     async def on_depth(callback) -> None:

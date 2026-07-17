@@ -66,6 +66,19 @@ def role_keyboard(task_id):
     )
 
 
+def clarify_skip_keyboard(task_id):
+    """A single Skip button under the interview questions, so a user who doesn't
+    want to add context can go straight to the depth chooser. The task id rides
+    in callback_data (stateless, same pattern as the other choosers)."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⏭ Skip", callback_data=f"clarify:skip:{task_id}")]
+        ]
+    )
+
+
 def run_keyboard(depth, task_id):
     """Second-step buttons: pick the output FORMAT for a chosen depth. The depth,
     format and task id all ride in callback_data so the tap can enqueue the run
