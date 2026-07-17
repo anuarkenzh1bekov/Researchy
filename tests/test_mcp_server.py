@@ -1,9 +1,15 @@
 """MCP server surface: exactly 4 tools, expected schemas, backend delegation."""
 
 import httpx
+import pytest
 
-from research_assistant.mcp import server
-from research_assistant.mcp.backend import build_http
+# the mcp package lives in the optional [mcp] extra; without it, skip at
+# COLLECTION time — otherwise `pytest -m e2e` (which installs only [dev])
+# dies on this module's import before deselecting anything.
+pytest.importorskip("mcp")
+
+from research_assistant.mcp import server  # noqa: E402
+from research_assistant.mcp.backend import build_http  # noqa: E402
 
 
 async def test_registers_exactly_four_tools():

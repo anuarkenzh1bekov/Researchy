@@ -22,8 +22,9 @@ jobs:
           cache: pip
 
       - name: Install
-        # export extra included so the docx/pdf reporting tests run instead of skipping
-        run: pip install -e ".[dev,export]"
+        # export + mcp extras included so the docx/pdf reporting and MCP server
+        # tests run instead of skipping
+        run: pip install -e ".[dev,export,mcp]"
 
       - name: Lint (ruff)
         run: ruff check .
