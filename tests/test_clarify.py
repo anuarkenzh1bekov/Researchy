@@ -4,8 +4,6 @@ query folder that merges answers back into the pipeline's query."""
 
 from __future__ import annotations
 
-import pytest
-
 from research_assistant.agents.clarify import (
     MAX_QUESTIONS,
     compose_query_with_context,
