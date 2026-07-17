@@ -29,6 +29,27 @@ def spawn_render(task_id: uuid.UUID, placeholder, fmt: str = "md") -> None:
     render.add_done_callback(_RENDER_TASKS.discard)
 
 
+async def _await_saved_report(task_id: uuid.UUID, *, tries: int = 30, delay: float = 0.4):
+    """Poll the row until the report is persisted.
+
+    The synthesizer's `completed` event fires INSIDE the graph, a beat before
+    the worker commits final_report (save_result runs AFTER graph.ainvoke
+    returns). Reading on that event alone can catch the row mid-write and see an
+    empty report — the same race the CLI's _await_final guards against. Poll a
+    few seconds for the persisted report before giving up."""
+    from research_assistant.storage.db import get_sessionmaker
+    from research_assistant.storage.repository import ResearchTaskRepository
+
+    task = None
+    for _ in range(tries):
+        async with get_sessionmaker()() as session:
+            task = await ResearchTaskRepository(session).get(task_id)
+        if task is not None and task.final_report:
+            return task
+        await asyncio.sleep(delay)
+    return task
+
+
 def task_dict(task) -> dict:
     """Adapt a ResearchTask ORM row to the plain dict reporting.render expects,
     so the bot shares the CLI's one report renderer instead of duplicating it."""
@@ -72,8 +93,6 @@ async def _await_and_render(task_id: uuid.UUID, placeholder, fmt: str = "md") ->
     from aiogram.types import BufferedInputFile
 
     from research_assistant.events.subscriber import iter_events
-    from research_assistant.storage.db import get_sessionmaker
-    from research_assistant.storage.repository import ResearchTaskRepository
 
     try:
         async for event in iter_events(task_id):
@@ -86,8 +105,9 @@ async def _await_and_render(task_id: uuid.UUID, placeholder, fmt: str = "md") ->
                 await placeholder.edit_text("🚫 Research cancelled.")
                 return
             if event["agent_name"] == "synthesizer" and event["event_type"] == "completed":
-                async with get_sessionmaker()() as session:
-                    task = await ResearchTaskRepository(session).get(task_id)
+                # poll for the persisted report — the completed event beats the
+                # worker's save_result commit (see _await_saved_report).
+                task = await _await_saved_report(task_id)
                 if task is None or not task.final_report:
                     await placeholder.edit_text(
                         "⚠️ Research finished but produced no report. Please try again."
