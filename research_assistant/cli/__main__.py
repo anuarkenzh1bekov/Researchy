@@ -47,10 +47,10 @@ def _emit_saved(task: dict, fmt: str) -> None:
     try:
         saved = reporting.save_report(task, fmt)
     except (ModuleNotFoundError, RuntimeError, ValueError) as e:
-        print(f"✗ {e}")
+        render.print_err(str(e))
         return
     if saved:
-        print(f"saved → {saved}")
+        render.print_note(f"saved → {saved}")
 
 
 def _load_draft(path_str: str | None) -> str | None:
@@ -64,15 +64,15 @@ def _load_draft(path_str: str | None) -> str | None:
 
     path = Path(path_str)
     if not path.is_file():
-        print(f"✗ draft file not found: {path}")
+        render.print_err(f"draft file not found: {path}")
         raise SystemExit(1)
     try:
         text, truncated = extract_draft_text(path.name, path.read_bytes())
     except DraftError as e:
-        print(f"✗ draft: {e}")
+        render.print_err(f"draft: {e}")
         raise SystemExit(1) from e
     if truncated:
-        print("⚠ draft truncated to 50,000 characters")
+        render.print_note("⚠ draft truncated to 50,000 characters")
     return text
 
 
@@ -89,38 +89,45 @@ def _load_source_files(paths: list[str] | None) -> list[dict] | None:
     for p in paths:
         path = Path(p)
         if not path.is_file():
-            print(f"✗ source file not found: {path}")
+            render.print_err(f"source file not found: {path}")
             raise SystemExit(1)
         try:
             text, truncated = extract_draft_text(path.name, path.read_bytes())
         except DraftError as e:
-            print(f"✗ source file {path.name}: {e}")
+            render.print_err(f"source file {path.name}: {e}")
             raise SystemExit(1) from e
         if truncated:
-            print(f"⚠ {path.name} truncated to 50,000 characters")
+            render.print_note(f"⚠ {path.name} truncated to 50,000 characters")
         docs.append({"title": path.name, "text": text})
     return docs
 
 
+_SCRAPE_MARKS = {"ok": "[green]✓[/]", "partial": "[yellow]⚠[/]", "failed": "[red]✗[/]"}
+
+
 def _print_scrape_warnings(task: dict) -> None:
-    """Per-URL outcome block from the structured scrape_report."""
+    """Per-URL outcome block from the structured scrape_report, in the shared
+    colour scheme (green/yellow/red marks, dim details)."""
+    from rich.markup import escape
+
     report = task.get("scrape_report") or []
     if not report:
         return
+    console = render._console()
     ok = sum(1 for r in report if r.get("status") == "ok")
-    print(f"sources: {ok} of {len(report)} sites loaded")
-    marks = {"ok": "✓", "partial": "⚠", "failed": "✗"}
+    console.print(f"[dim]sources: {ok} of {len(report)} sites loaded[/]")
     for r in report:
-        line = f"  {marks.get(r.get('status'), '?')} {r.get('url')}"
+        line = f"  {_SCRAPE_MARKS.get(r.get('status'), '?')} {escape(str(r.get('url')))}"
         if r.get("status") == "ok":
-            line += (
-                f" — {r.get('pages_fetched', 0)} pages"
+            detail = (
+                f"{r.get('pages_fetched', 0)} pages"
                 if r.get("pages_fetched")
-                else f" — {r.get('chunks', 0)} chunks"
+                else f"{r.get('chunks', 0)} chunks"
             )
+            line += f" [dim]— {detail}[/]"
         elif r.get("error"):
-            line += f" — {r['error']}"
-        print(line)
+            line += f" [dim]— {escape(str(r['error']))}[/]"
+        console.print(line)
 
 
 def _run_research(
@@ -156,9 +163,21 @@ def _ask_line(prompt_text: str) -> str:
     from rich.markup import escape
 
     try:
-        return render._console().input(f"  [dim]{escape(prompt_text)}[/]\n  ❯ ").strip()
+        return (
+            render._console()
+            .input(f"  [bold {render._ACCENT}]{escape(prompt_text)}[/]\n  [dim]❯[/] ")
+            .strip()
+        )
     except (EOFError, KeyboardInterrupt):
         return ""
+
+
+def _interview_emit(message: str) -> None:
+    """Interview notices in the shared style: errors red, the rest quiet."""
+    if message.startswith("✗ "):
+        render.print_err(message[2:])
+    else:
+        render.print_note(message)
 
 
 def _clarify_via_api(client: ResearchClient, topic: str, draft: str | None = None) -> list[str]:
@@ -183,10 +202,12 @@ def _guard(fn) -> int:
         fn()
         return 0
     except httpx.ConnectError:
-        print("✗ cannot reach the API — is it running? (uvicorn research_assistant.api.app:app)")
+        render.print_err(
+            "cannot reach the API — is it running? (uvicorn research_assistant.api.app:app)"
+        )
         return 1
     except APIError as e:
-        print(f"✗ {e}")
+        render.print_err(str(e))
         return 1
 
 
@@ -207,7 +228,7 @@ def _run_local(
     try:
         task = run_local(query, depth, urls=urls, draft=draft, source_docs=source_docs)
     except Exception as e:  # noqa: BLE001 — one-line message, no traceback
-        print(f"✗ local run failed: {e}")
+        render.print_err(f"local run failed: {e}")
         return 1
     _print_scrape_warnings(task)
     render.render_report(task)
@@ -231,6 +252,7 @@ def _cmd_ask(args) -> int:
                 query,
                 get_questions=lambda t: run_clarify_local(t, draft),
                 ask_line=_ask_line,
+                emit=_interview_emit,
                 default_depth=args.depth or "standard",
             )
             query, urls, source_docs = _merge_interview(res, urls, source_docs)
@@ -247,6 +269,7 @@ def _cmd_ask(args) -> int:
                 q,
                 get_questions=lambda t: _clarify_via_api(c, t, draft),
                 ask_line=_ask_line,
+                emit=_interview_emit,
                 default_depth=args.depth or "standard",
             )
             q, u, docs = _merge_interview(res, u, docs)
@@ -343,6 +366,7 @@ def _research_with_interview(client: ResearchClient, topic: str) -> None:
         topic,
         get_questions=lambda t: _clarify_via_api(client, t),
         ask_line=_ask_line,
+        emit=_interview_emit,
     )
     _run_research(
         client, res.query, depth=res.depth,

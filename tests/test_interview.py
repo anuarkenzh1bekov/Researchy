@@ -90,6 +90,23 @@ def test_run_interview_no_questions_still_asks_for_sources():
     assert res.urls == ["https://only.test"]
 
 
+def test_run_interview_numbers_the_questions_but_folds_them_bare():
+    """Prompts show '1. <q>' for readability; the folded query keeps the bare
+    question text (numbering is presentation, not content)."""
+    prompts: list[str] = []
+    answers = iter(["EU", "", "", ""])
+
+    def ask(prompt: str) -> str:
+        prompts.append(prompt)
+        return next(answers)
+
+    res = run_interview(
+        "t", get_questions=lambda _t: ["Region?"], ask_line=ask, emit=lambda _m: None
+    )
+    assert prompts[0] == "1. Region?"
+    assert "- Q: Region?" in res.query  # bare, un-numbered in the folded query
+
+
 def test_run_interview_invalid_depth_falls_back_to_default():
     notices: list[str] = []
     res = run_interview(

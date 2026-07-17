@@ -95,8 +95,8 @@ def run_interview(
     default_depth = default_depth if default_depth in _DEPTHS else _DEFAULT_DEPTH
     emit("A few quick questions to focus the research (press Enter to skip any):")
     qa: list[tuple[str, str]] = []
-    for q in get_questions(topic):
-        qa.append((q, ask_line(q)))
+    for i, q in enumerate(get_questions(topic), 1):
+        qa.append((q, ask_line(f"{i}. {q}")))  # numbered prompt; fold the bare question
     query = compose_query_with_context(topic, qa)
 
     urls = parse_urls(

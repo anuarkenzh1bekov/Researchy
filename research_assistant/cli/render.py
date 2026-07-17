@@ -60,6 +60,16 @@ def print_chat(message: str) -> None:
     _console().print(f"[{_ACCENT}]{message}[/]")
 
 
+def print_note(message: str) -> None:
+    """A quiet one-line notice (saved paths, interview hints)."""
+    _console().print(f"[dim]{message}[/]")
+
+
+def print_err(message: str) -> None:
+    """A one-line error in the shared style — red mark, plain message."""
+    _console().print(f"[bold red]✗[/] {message}")
+
+
 def _fmt_tokens(n: int) -> str:
     """Compact token count: 950 -> '950', 12_340 -> '12.3k'."""
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
@@ -153,13 +163,33 @@ def run_progress(events: Iterator[dict]) -> dict | None:
         def __rich__(self) -> Panel:
             return render()
 
+    # Researchers run as a parallel fan-out but share one row: track a done
+    # counter (planner's sub-question count = the expected total; the critic can
+    # add more, hence the max) so the row reads "2/4 · <current>" instead of
+    # whichever event happened to arrive last.
+    res_total = 0
+    res_done: set[str] = set()
+
     with Live(_View(), console=console, refresh_per_second=12):
         for ev in events:
             last = ev
             agent = ev.get("agent_name", "")
-            status[agent] = ev.get("event_type", "")
+            etype = ev.get("event_type", "")
+            status[agent] = etype
             payload = ev.get("payload") or {}
-            detail[agent] = _detail(payload)
+            if agent == "planner" and "sub_questions" in payload:
+                res_total = len(payload["sub_questions"])
+            if agent == "researcher":
+                sq = str(payload.get("sub_question", ""))
+                if etype in ("completed", "degraded", "failed") and sq:
+                    res_done.add(sq)
+                total = max(res_total, len(res_done))
+                if etype in ("completed", "degraded") and len(res_done) < total:
+                    status[agent] = "started"  # siblings still running — keep the spinner
+                cur = f" · {sq[:40]}" if status[agent] == "started" and sq else ""
+                detail[agent] = f"{len(res_done)}/{total}{cur}" if total else ""
+            else:
+                detail[agent] = _detail(payload)
             usage = payload.get("usage")
             if usage:
                 tokens += usage.get("total_tokens", 0) or 0
@@ -167,9 +197,12 @@ def run_progress(events: Iterator[dict]) -> dict | None:
 
 
 def render_report(task: dict) -> None:
+    from rich import box
     from rich.markdown import Markdown
     from rich.panel import Panel
     from rich.rule import Rule
+    from rich.table import Table
+    from rich.text import Text
 
     console = _console()
     if task.get("status") == "failed":
@@ -183,16 +216,40 @@ def render_report(task: dict) -> None:
         )
         return
 
-    console.print(Rule(f"[bold {_ACCENT}]Report[/]", style=_ACCENT))
+    # Title panel: the query as the paper's masthead, with a quiet meta line.
+    sources = task.get("sources") or []
+    meta = " · ".join(
+        p
+        for p in (
+            task.get("depth"),
+            f"{len(sources)} sources" if sources else "",
+            f"{_fmt_tokens(task.get('total_tokens') or 0)} tokens"
+            if task.get("total_tokens")
+            else "",
+        )
+        if p
+    )
+    console.print(
+        Panel(
+            Text(task.get("query") or "", style=f"bold {_ACCENT}"),
+            title=f"[bold {_ACCENT}]research paper — draft[/]",
+            subtitle=f"[dim]{meta}[/]" if meta else None,
+            border_style=_ACCENT,
+            style=f"on {_BG}",
+            padding=(1, 2),
+        )
+    )
     console.print(Markdown(task.get("final_report") or "(empty report)"))
 
-    sources = task.get("sources") or []
     if sources:
         console.print(Rule(f"[bold {_ACCENT}]Sources[/]", style=_ACCENT))
+        t = Table(box=box.SIMPLE, show_header=False, padding=(0, 1), pad_edge=False)
+        t.add_column(justify="right", style=f"bold {_ACCENT}", no_wrap=True)
+        t.add_column(overflow="fold")
         for i, s in enumerate(sources, 1):
             title, url = s.get("title", ""), s.get("url", "")
-            console.print(f"  [bold {_ACCENT}]{i:>2}[/] {title}  [dim][link]{url}[/][/]")
-        console.print()
+            t.add_row(f"[{i}]", f"{title}\n[dim][link={url}]{url}[/][/]")
+        console.print(t)
 
     _print_usage(console, task)
 
@@ -235,10 +292,23 @@ def render_history(tasks: list) -> None:
         expand=True,
     )
     table.add_column("id", style=_ACCENT, no_wrap=True)
+    table.add_column("when", style="dim", no_wrap=True)
+    table.add_column("depth", no_wrap=True)
     table.add_column("status", no_wrap=True)
+    table.add_column("tokens", justify="right", style="dim", no_wrap=True)
     table.add_column("query", overflow="ellipsis")
     for t in tasks:
         status = t.get("status", "")
         styled = f"[{_STATUS_STYLE.get(status, 'white')}]{status}[/]"
-        table.add_row(str(t.get("id", ""))[:8], styled, (t.get("query") or "")[:80])
+        # created_at arrives as an ISO string; slice to "YYYY-MM-DD HH:MM"
+        when = (t.get("created_at") or "")[:16].replace("T", " ")
+        tokens = t.get("total_tokens") or 0
+        table.add_row(
+            str(t.get("id", ""))[:8],
+            when,
+            t.get("depth") or "—",
+            styled,
+            _fmt_tokens(tokens) if tokens else "—",
+            (t.get("query") or "")[:80],
+        )
     console.print(table)

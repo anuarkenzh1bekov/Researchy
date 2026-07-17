@@ -165,7 +165,51 @@ def test_shape_carries_full_token_usage():
         "sub_questions": [],
         "usage": {"prompt_tokens": 900, "completion_tokens": 100, "total_tokens": 1000},
     }
-    task = _shape("q", final)
+    task = _shape("q", final, depth="deep")
     assert task["total_tokens"] == 1000
     assert task["prompt_tokens"] == 900
     assert task["completion_tokens"] == 100
+    assert task["depth"] == "deep"  # shown in the report header panel
+
+
+def test_run_local_bridges_events_to_the_live_panel(monkeypatch):
+    """run_local must render the SAME progress panel the API path uses: the
+    pipeline runs on a worker thread publishing into a queue and run_progress
+    consumes it — verify events flow through and the shaped result comes back."""
+    import research_assistant.cli.local as local_mod
+
+    published: list[dict] = []
+
+    async def fake_run(query, profile, urls=None, draft=None, source_docs=None, publish=None):
+        await publish("planner", "started", {})
+        await publish("planner", "completed", {"sub_questions": ["a?"], "usage": {}})
+        await publish("synthesizer", "completed", {"usage": {}})
+        return {"final_report": "report!", "sources": [], "sub_questions": ["a?"]}, None
+
+    def fake_progress(events):
+        published.extend(events)  # drain the queue like the real panel does
+        return published[-1] if published else None
+
+    monkeypatch.setattr(local_mod, "_run", fake_run)
+    monkeypatch.setattr("research_assistant.cli.render.run_progress", fake_progress)
+    task = local_mod.run_local("q", "quick")
+    assert task["final_report"] == "report!"
+    assert task["depth"] == "quick"
+    assert [e["agent_name"] for e in published] == ["planner", "planner", "synthesizer"]
+
+
+def test_run_local_reraises_pipeline_errors(monkeypatch):
+    """A pipeline failure on the worker thread must surface on the caller's
+    thread (the CLI turns it into a one-line message), not vanish."""
+    import pytest
+
+    import research_assistant.cli.local as local_mod
+
+    async def fake_run(*a, publish=None, **kw):
+        await publish("planner", "failed", {"error": "boom"})
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(local_mod, "_run", fake_run)
+    monkeypatch.setattr("research_assistant.cli.render.run_progress", lambda ev: list(ev))
+    with pytest.raises(RuntimeError, match="boom"):
+        local_mod.run_local("q")

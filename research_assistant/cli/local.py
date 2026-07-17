@@ -49,6 +49,7 @@ async def _run(
     urls: list[str] | None = None,
     draft: str | None = None,
     source_docs: list[dict] | None = None,
+    publish=_progress,
 ) -> tuple[dict, list | None]:
     config = config_from_settings()
     tools = get_tools()
@@ -57,13 +58,13 @@ async def _run(
         from research_assistant.tools.web_scraper import UserSourcesTool
 
         scraper = UserSourcesTool(urls or [], docs=source_docs)
-        scrape_report = await scraper.prepare(_progress)
+        scrape_report = await scraper.prepare(publish)
         if any(r["status"] != "failed" for r in scrape_report):
             tools = [*tools, scraper]
     graph = build_graph(
         provider=get_provider(config),
         tools=tools,
-        publish=_progress,
+        publish=publish,
         max_revisions=profile.max_revisions,
         config=config,
         node_configs=node_configs_from_settings(),
@@ -76,13 +77,16 @@ async def _run(
     return await graph.ainvoke(inputs), scrape_report
 
 
-def _shape(query: str, final: dict, scrape_report: list | None = None) -> dict:
+def _shape(
+    query: str, final: dict, scrape_report: list | None = None, depth: str | None = None
+) -> dict:
     """Project the graph's final state into the task-shaped dict that
     render.render_report / _save_report (and the Telegram template) understand."""
     usage = final.get("usage") or {}
     return {
         "status": "done",
         "query": query,
+        "depth": depth,
         "final_report": final.get("final_report", ""),
         "sources": final.get("sources", []),
         "sub_questions": final.get("sub_questions", []),
@@ -101,11 +105,46 @@ def run_local(
     source_docs: list[dict] | None = None,
 ) -> dict:
     """Run the pipeline in-process and return a task-shaped dict that
-    render.render_report / _save_report already understand."""
+    render.render_report / _save_report already understand.
+
+    Renders the SAME live progress panel the API path shows: the pipeline runs
+    on a worker thread whose publish hook feeds a queue, and the main thread
+    drives render.run_progress off that queue (None = sentinel) — one renderer
+    for both modes instead of plain one-line marks here."""
+    import queue
+    import threading
+
+    from research_assistant.cli import render
+
     profile = get_profile(depth)
-    print(f"running locally · depth={profile.name}")
-    final, report = asyncio.run(_run(query, profile, urls, draft, source_docs))
-    return _shape(query, final, report)
+    render.print_note(f"running locally · depth={profile.name}")
+
+    events: queue.Queue = queue.Queue()
+
+    async def to_queue(agent: str, event_type: str, payload: dict) -> None:
+        events.put({"agent_name": agent, "event_type": event_type, "payload": payload})
+
+    out: dict = {}
+    err: list[BaseException] = []
+
+    def work() -> None:
+        try:
+            out["result"] = asyncio.run(
+                _run(query, profile, urls, draft, source_docs, publish=to_queue)
+            )
+        except BaseException as e:  # noqa: BLE001 — re-raised on the main thread below
+            err.append(e)
+        finally:
+            events.put(None)  # sentinel: closes the panel's event iterator
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    render.run_progress(iter(events.get, None))
+    worker.join()
+    if err:
+        raise err[0]
+    final, report = out["result"]
+    return _shape(query, final, report, depth=profile.name)
 
 
 def run_clarify_local(topic: str, draft: str | None = None) -> list[str]:
@@ -129,6 +168,8 @@ async def run_local_async(
 ) -> dict:
     """Async sibling of run_local for callers already inside an event loop
     (e.g. the standalone Telegram bot's aiogram handlers, which can't call
-    asyncio.run). Same in-process pipeline, same task-shaped result."""
-    final, report = await _run(query, get_profile(depth), urls, draft, source_docs)
-    return _shape(query, final, report)
+    asyncio.run). Same in-process pipeline, same task-shaped result; keeps the
+    plain one-line _progress marks — there's no terminal panel to drive there."""
+    profile = get_profile(depth)
+    final, report = await _run(query, profile, urls, draft, source_docs)
+    return _shape(query, final, report, depth=profile.name)
