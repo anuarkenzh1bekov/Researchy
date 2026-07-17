@@ -127,6 +127,18 @@ def test_prompt_demands_paper_structure():
     assert "## Conclusion" in p
 
 
+def test_prompt_demands_draft_methodology_and_recommendations():
+    # the output is a proposal-stage DRAFT built only from literature: it must
+    # add a proposed-study section and an actionable next-steps section, and
+    # frame itself as a draft rather than a completed empirical study.
+    p = _system_prompt()
+    assert "draft" in p.lower()
+    assert "## Proposed Methodology" in p
+    assert "## Recommendations" in p
+    # methodology is a proposal, not fabricated results
+    assert "invent no results" in p.lower() or "invent no results, data" in p.lower()
+
+
 def test_prompt_keeps_abstract_headingless():
     # the abstract must be the OPENING PARAGRAPH, not a "## Abstract" section —
     # latex.to_tex turns leading paragraphs into \begin{abstract}.

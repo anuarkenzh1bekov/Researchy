@@ -16,7 +16,7 @@ Decompose → research in parallel → critique for gaps → synthesize. Orchest
 ![Postgres](https://img.shields.io/badge/Postgres-storage-4169E1?logo=postgresql&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-[Quick start](#-quick-start) · [Features](#-key-features) · [Architecture](#-architecture) · [CLI](#-cli-client) · [Security](#-security)
+[Quick start](#-quick-start) · [Features](#-key-features) · [Architecture](#-architecture) · [CLI](#-cli-client) · [MCP server](#-mcp-server) · [Security](#-security)
 
 </div>
 
@@ -28,8 +28,9 @@ for gaps and contradictions (looping back when the evidence is thin), then synth
 structured Markdown report with globally numbered citations. Progress streams to the client
 as it happens.
 
-It's **backend only** - one backend, many frontends. A terminal CLI and an optional
-Telegram bot ship in the repo; both are *just API consumers*, importing no server internals.
+It's **backend only** - one backend, many frontends. A terminal CLI, an optional
+Telegram bot, and an MCP server ship in the repo; all three are *just API consumers*,
+importing no server internals.
 
 ## 🎬 Demo
 
@@ -271,6 +272,38 @@ The API-connected bot sends the finished report as a `.md` attachment with **inl
 [DOCX] / [PDF] buttons** - a tap re-renders that format on demand (needs the `export` extra
 on the bot host). The same one renderer (`research_assistant/export/`) backs the CLI's
 `--format` flag and the bot buttons.
+
+## 🔌 MCP server
+
+Researchy is also an MCP server — Claude Desktop or Claude Code can run
+research as a tool. Like the CLI and the bot, it's *just an API consumer*
+(`research-mcp`, stdio): 4 tools — `start_research`, `get_research`,
+`list_research`, `cancel_research` — with async start + poll semantics, so
+no tool call ever blocks on a multi-minute run.
+
+Claude Code:
+
+```bash
+claude mcp add researchy -e RESEARCHY_API_KEY=<your-key> -- research-mcp
+```
+
+Claude Desktop (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "researchy": {
+      "command": "research-mcp",
+      "env": {
+        "RESEARCHY_API_URL": "http://127.0.0.1:8000",
+        "RESEARCHY_API_KEY": "<your-key>"
+      }
+    }
+  }
+}
+```
+
+Requires the backend stack to be running, and `pip install -e ".[mcp]"`.
 
 ## 🧪 Evaluation
 

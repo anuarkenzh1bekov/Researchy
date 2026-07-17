@@ -55,6 +55,7 @@ dependencies = [
 
 [project.scripts]
 research = "research_assistant.cli.__main__:main"
+research-mcp = "research_assistant.mcp.__main__:main"
 
 [project.optional-dependencies]
 # DOCX/PDF report export (`research ask ... --format docx|pdf`). Pure-pip, no
@@ -66,6 +67,12 @@ export = [
 # gracefully ("page requires JS rendering, browser unavailable").
 scraper = [
     "playwright>=1.45",
+]
+# MCP frontend (`research-mcp`): exposes the pipeline as tools for MCP hosts
+# (Claude Desktop / Claude Code). v1.x pin — v2 is a pre-release that renames
+# FastMCP to MCPServer.
+mcp = [
+    "mcp>=1.2,<2",
 ]
 dev = [
     "pytest>=8.3",
