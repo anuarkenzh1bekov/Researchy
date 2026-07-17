@@ -87,6 +87,12 @@ they join the same chunk index and are cited APA-style as uploaded documents.
 as the paper's foundation: the Planner aims sub-questions at its gaps, the Synthesizer
 preserves its structure and voice while integrating the cited findings.
 
+**11. Interview intake.** Before researching a rough topic, an AI-generated interview
+(`POST /research/clarify`) asks a few clarifying questions tailored to it — audience, scope,
+angle — then gathers sources and depth; everything folds into one enriched query. On by
+default in the CLI REPL, opt-in via `ask --interview`, and mirrored in the Telegram bot
+(questions stored on the task row + a Skip button — no in-memory session).
+
 ## 🧭 Architecture
 
 ```
@@ -223,16 +229,18 @@ BibTeX — drop it straight into Overleaf), and `--format paper` compiles that t
 the [tectonic](https://tectonic-typesetting.github.io) engine if it's on your PATH.
 In the REPL a follow-up line
 (`and his trophies?`, `why?`) is folded into the previous question so the pipeline keeps
-the subject; `new` clears the running topic. Config can also come from `RESEARCHY_API_URL` /
-`RESEARCHY_API_KEY` (CI-friendly).
+the subject; `new` clears the running topic. The idle prompt cycles example questions as
+ghost text — press **Tab** to fill the current suggestion into the line and edit it. Config
+can also come from `RESEARCHY_API_URL` / `RESEARCHY_API_KEY` (CI-friendly).
 
 **Interview intake.** For a rough topic, an interview step gathers context before the
 pipeline runs: it asks the model (`POST /research/clarify`) for a few clarifying questions
 tailored to the topic, collects your answers, then prompts for optional source URLs and
-files — all folded into one enriched query (no schema change). It's **on by default in the
-REPL** for a fresh topic (each question is skippable with Enter) and opt-in on the one-shot
-path via `ask "..." --interview`; it stays off for pipes/CI (non-interactive stdout) and
-works the same with `--local`. A failed clarify degrades to a plain ask.
+files and for the research depth (`quick / standard / deep`, Enter keeps the default) — all
+folded into one enriched query (no schema change). It's **on by default in the REPL** for a
+fresh topic (each question is skippable with Enter) and opt-in on the one-shot path via
+`ask "..." --interview`; it stays off for pipes/CI (non-interactive stdout) and works the
+same with `--local`. A failed clarify degrades to a plain ask.
 
 `--url` (repeatable, max 5) adds your own websites as research sources and `--draft FILE`
 (txt/md/pdf/docx) makes the paper build on your draft — both work with and without
@@ -261,10 +269,15 @@ research ask "how does pgvector affect RAG latency?" --local
 research ask "compare Rust and Go for systems work" --local --depth deep
 ```
 
+Local runs render the **same live progress panel** as the API path — per-stage checklist, a
+`2/4 · <sub-question>` researcher counter, elapsed time and a running token count — the
+pipeline runs on a worker thread feeding the panel through a queue.
+
 `--depth quick | standard | deep` (default `standard`) scales one knob across the whole run:
 number of sub-questions, sources per sub-question, and Critic→Researcher revision rounds.
 It works with and without `--local` — over the API it rides as `depth` on `POST /research`
-(the same knob the Telegram bot's ⚡/🔍/🧠 buttons use).
+(the same knob the Telegram bot's ⚡/🔍/🧠 buttons and the CLI interview's depth question
+use).
 
 ### Telegram bot - run one with zero infra
 
