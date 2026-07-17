@@ -13,6 +13,8 @@ from research_assistant.cli.render import _ACCENT, _BG, _console
 
 def print_banner(*, base_url: str | None = None, has_key: bool = False) -> None:
     """The REPL splash — a styled welcome box with the current setup."""
+    import sys
+
     from rich.panel import Panel
 
     auth = "[green]key set[/]" if has_key else "[yellow]no key — run `login`[/]"
@@ -26,6 +28,10 @@ def print_banner(*, base_url: str | None = None, has_key: bool = False) -> None:
         "",
         "[dim]ask a question, or type [/][bold]exit[/][dim] to quit[/]",
     ]
+    # The suggestion-cycling prompt (and thus Tab-to-accept) is the Windows
+    # terminal path only — only hint at it where it actually works.
+    if sys.stdout.isatty() and sys.platform == "win32":
+        lines.append("[dim]press [/][bold]Tab[/][dim] to use the suggested question[/]")
     console = _console()
     # Adaptive: fill ~85% of the terminal so it visibly grows/shrinks with the
     # window, with a readable floor, a sane cap, and never wider than the window.
@@ -166,21 +172,36 @@ def _animated_prompt(msvcrt) -> str:
         if not stopped:
             stopped = wait(1.2)  # hold the finished line, watching for a key
 
+    # A key was pressed. Tab ACCEPTS the currently-shown example (seed it into
+    # the editable line); any other key starts the user's own input, with that
+    # first keystroke read as the first character typed.
+    first = msvcrt.getwch()
+    if first == "\t":
+        out.write(f"{_A_CLEARLINE}{marker}{q}")  # redraw the example in normal colour
+        out.flush()
+        return _read_line(msvcrt, out, buf=q)
     out.write(f"{_A_CLEARLINE}{marker}")  # clean prompt for the real input
     out.flush()
-    return _read_line(msvcrt, out)
+    return _read_line(msvcrt, out, first=first)
 
 
-def _read_line(msvcrt, out) -> str:
+def _read_line(msvcrt, out, *, buf: str | None = None, first: str | None = None) -> str:
     """Minimal raw-mode line editor (Enter submits, Backspace deletes, Ctrl-C/Z
-    raise). The keypress that stopped the animation is read here as the 1st char."""
-    buf: list[str] = []
+    raise).
+
+    `buf` pre-seeds the line — the Tab-accepted example, already rendered by the
+    caller — so it can be edited or submitted with Enter. `first` is a key the
+    caller already read (the keystroke that stopped the animation) to process as
+    if it were just typed."""
+    chars: list[str] = list(buf) if buf else []
+    pending = first
     while True:
-        ch = msvcrt.getwch()
+        ch = pending if pending is not None else msvcrt.getwch()
+        pending = None
         if ch in ("\r", "\n"):
             out.write("\r\n")
             out.flush()
-            return "".join(buf).strip()
+            return "".join(chars).strip()
         if ch == "\x03":  # Ctrl-C
             raise KeyboardInterrupt
         if ch == "\x1a":  # Ctrl-Z (Windows EOF)
@@ -188,12 +209,14 @@ def _read_line(msvcrt, out) -> str:
         if ch in ("\x00", "\xe0"):  # arrow / function key → consume 2nd byte, ignore
             msvcrt.getwch()
             continue
+        if ch == "\t":  # a stray Tab while editing types nothing
+            continue
         if ch in ("\b", "\x7f"):  # backspace
-            if buf:
-                buf.pop()
+            if chars:
+                chars.pop()
                 out.write("\b \b")
                 out.flush()
             continue
-        buf.append(ch)
+        chars.append(ch)
         out.write(ch)
         out.flush()
