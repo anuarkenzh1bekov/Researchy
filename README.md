@@ -37,7 +37,7 @@ importing no server internals.
 
 ## 🎬 Demo
 
-![Researchy running locally](docs/demo.gif)
+![Researchy running locally](docs/Researchy_Demo_v2.gif)
 
 ## ✨ Key features
 
