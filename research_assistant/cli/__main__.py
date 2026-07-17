@@ -16,6 +16,7 @@ import httpx
 
 from research_assistant.cli import chat, config, prompt, render
 from research_assistant.cli.client import APIError, ResearchClient
+from research_assistant.cli.interview import InterviewResult, run_interview
 from research_assistant.export import reporting
 
 
@@ -143,6 +144,39 @@ def _run_research(
     _emit_saved(final, fmt)
 
 
+def _tty() -> bool:
+    """Interactive stdout? The interview only makes sense at a real terminal —
+    a pipe/redirect (scripts, CI) must never block waiting for answers."""
+    return sys.stdout.isatty()
+
+
+def _ask_line(prompt_text: str) -> str:
+    """Read one interview answer. Escapes the prompt so an LLM-written question
+    containing '[' isn't mangled as rich markup; Ctrl-C/EOF read as a skip."""
+    from rich.markup import escape
+
+    try:
+        return render._console().input(f"  [dim]{escape(prompt_text)}[/]\n  ❯ ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+def _clarify_via_api(client: ResearchClient, topic: str, draft: str | None = None) -> list[str]:
+    """Interview questions from the API, degrading to none if the server is down
+    or doesn't answer — a failed clarify must not sink the whole ask."""
+    try:
+        return client.clarify(topic, draft)
+    except (APIError, httpx.HTTPError):
+        return []
+
+
+def _merge_interview(
+    res: InterviewResult, urls: list[str], source_docs: list[dict]
+) -> tuple[str, list[str], list[dict]]:
+    """Combine interview-gathered sources with any passed on the command line."""
+    return res.query, [*urls, *res.urls], [*source_docs, *res.source_docs]
+
+
 def _guard(fn) -> int:
     """Run a CLI action, mapping connection/API errors to friendly one-liners."""
     try:
@@ -183,20 +217,38 @@ def _run_local(
 
 def _cmd_ask(args) -> int:
     draft = _load_draft(args.draft)
-    source_docs = _load_source_files(args.source_files)
+    source_docs = _load_source_files(args.source_files) or []
+    urls = list(args.urls or [])
+    query = args.query
+    interview = getattr(args, "interview", False) and _tty()
+
     if args.local:
-        return _run_local(
-            args.query, args.depth, args.format,
-            urls=args.urls, draft=draft, source_docs=source_docs,
-        )
-    return _guard(
-        lambda: _with_client(
-            lambda c: _run_research(
-                c, args.query, args.format, args.depth,
-                urls=args.urls, draft=draft, source_docs=source_docs,
+        if interview:
+            from research_assistant.cli.local import run_clarify_local
+
+            res = run_interview(
+                query,
+                get_questions=lambda t: run_clarify_local(t, draft),
+                ask_line=_ask_line,
             )
+            query, urls, source_docs = _merge_interview(res, urls, source_docs)
+        return _run_local(
+            query, args.depth, args.format,
+            urls=urls, draft=draft, source_docs=source_docs,
         )
-    )
+
+    def action(c: ResearchClient) -> None:
+        q, u, docs = query, urls, source_docs
+        if interview:
+            res = run_interview(
+                q,
+                get_questions=lambda t: _clarify_via_api(c, t, draft),
+                ask_line=_ask_line,
+            )
+            q, u, docs = _merge_interview(res, u, docs)
+        _run_research(c, q, args.format, args.depth, urls=u, draft=draft, source_docs=docs)
+
+    return _guard(lambda: _with_client(action))
 
 
 def _cmd_history(args) -> int:
@@ -272,10 +324,25 @@ def _repl() -> int:
         if topic and chat.is_followup(query):
             research_query = chat.compose_followup(topic, query)
             render.print_chat(f"↳ following up on: {topic[:60]}")
+            _guard(lambda rq=research_query: _with_client(lambda c: _run_research(c, rq)))
         else:
-            research_query = query
             topic = query  # a fresh question becomes the new topic
-        _guard(lambda rq=research_query: _with_client(lambda c: _run_research(c, rq)))
+            # fresh topic → interview first (clarifying Qs + sources), then research
+            _guard(lambda t=query: _with_client(lambda c: _research_with_interview(c, t)))
+
+
+def _research_with_interview(client: ResearchClient, topic: str) -> None:
+    """REPL fresh-topic flow: interview for context, then run the pipeline with
+    the enriched query and any gathered sources."""
+    res = run_interview(
+        topic,
+        get_questions=lambda t: _clarify_via_api(client, t),
+        ask_line=_ask_line,
+    )
+    _run_research(
+        client, res.query,
+        urls=res.urls or None, source_docs=res.source_docs or None,
+    )
 
 
 # --- argument parsing --------------------------------------------------------
@@ -293,6 +360,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--local",
         action="store_true",
         help="run the pipeline in-process (no API/Celery/Redis needed)",
+    )
+    ask.add_argument(
+        "--interview",
+        action="store_true",
+        help="ask AI-generated clarifying questions (and for sources) before researching",
     )
     ask.add_argument(
         "--depth",

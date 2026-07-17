@@ -38,8 +38,10 @@ def test_planner_truncates_long_draft():
 
 
 def test_synthesizer_without_draft_unchanged():
+    # the paper is always framed as a "draft" now; what's conditional is the
+    # USER-draft build-on rule, which must stay absent without one.
     msgs = _synthesizer_messages("q", [], [])
-    assert "draft" not in msgs[0].content.lower()
+    assert "Build the paper ON that draft" not in msgs[0].content
 
 
 def test_synthesizer_draft_in_system_and_user():

@@ -64,6 +64,48 @@ def _planner_messages(query: str, n: int = 4, draft: str | None = None) -> list[
     ]
 
 
+def _clarifier_messages(topic: str, draft: str | None = None) -> list[Message]:
+    """Interview step, BEFORE the Planner: turn a rough topic into a few
+    clarifying questions whose answers focus the paper. JSON out, like the
+    Planner — parsed by complete_json against ClarifyQuestions."""
+    user_content = topic
+    if draft:
+        excerpt = draft[:PLANNER_DRAFT_CHARS]
+        marker = "\n[... draft continues ...]" if len(draft) > PLANNER_DRAFT_CHARS else ""
+        user_content = (
+            f"{topic}\n\n"
+            "The user also attached a draft of their paper — aim the questions at "
+            "the gaps and open choices it leaves.\n\n"
+            f"--- DRAFT ---\n{excerpt}{marker}"
+        )
+    return [
+        Message(
+            role="system",
+            content=(
+                "You are the Clarifier at the very start of a research-paper "
+                "pipeline. The user gave only a rough topic. Ask 3-4 short "
+                "clarifying questions whose answers would let the pipeline focus "
+                "the paper. Target the dimensions that most change the research: "
+                "the intended audience, the scope and boundaries (what to include "
+                "or exclude), the angle or purpose, and the timeframe or geography "
+                "when they matter.\n"
+                "- One sentence each; concrete and answerable in a few words. No "
+                "compound questions, no yes/no questions.\n"
+                "- Tailor every question to THIS topic — never generic filler that "
+                "would fit any subject.\n"
+                "- Write them in the language of the topic.\n"
+                'Reply with ONLY JSON: {"questions": ["...", "..."]}.\n'
+                'Example — topic "impact of remote work on productivity" -> '
+                '{"questions": ["Which industry or job roles should the paper '
+                'focus on?", "Should the scope be a specific region or global?", '
+                '"Are you interested in individual output, team output, or both?", '
+                '"What time period should the evidence cover?"]}'
+            ),
+        ),
+        Message(role="user", content=user_content),
+    ]
+
+
 def _researcher_messages(
     query: str,
     sub_question: str,

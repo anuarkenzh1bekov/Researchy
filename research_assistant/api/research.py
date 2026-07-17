@@ -19,7 +19,13 @@ from fastapi.responses import StreamingResponse
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from research_assistant.api.deps import require_principal
-from research_assistant.api.schemas import CreateResearchRequest, TaskSummaryView, TaskView
+from research_assistant.api.schemas import (
+    ClarifyRequest,
+    ClarifyResponse,
+    CreateResearchRequest,
+    TaskSummaryView,
+    TaskView,
+)
 from research_assistant.core.settings import get_settings
 from research_assistant.events.publisher import publish_event
 from research_assistant.storage.db import get_session, get_sessionmaker
@@ -98,6 +104,27 @@ async def create_research(
 
     run_research_task.apply_async(args=(str(task.id), body.depth), task_id=str(task.id))
     return TaskView.from_task(task)
+
+
+@router.post("/clarify", response_model=ClarifyResponse)
+async def clarify_research(
+    body: ClarifyRequest,
+    principal: str = Depends(require_principal),
+) -> ClarifyResponse:
+    """Turn a rough topic into a few clarifying questions the client asks the
+    user before creating a task. A single quick LLM call — no task, no Celery,
+    no persistence. Returns an empty list (not an error) when the model gives
+    nothing usable, so the client's interview degrades to 'just research it'."""
+    from research_assistant.agents.clarify import generate_clarifying_questions
+    from research_assistant.llm.factory import config_from_settings, get_provider
+
+    # reuse the Planner's model override: this is the same kind of cheap,
+    # structured-JSON call the Planner makes.
+    config = config_from_settings("planner")
+    questions = await generate_clarifying_questions(
+        get_provider(config), body.topic, config=config, draft=body.draft
+    )
+    return ClarifyResponse(questions=questions)
 
 
 @router.post("/draft-extract")

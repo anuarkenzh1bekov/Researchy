@@ -2,7 +2,7 @@
 
 # 🧐 Researchy
 
-**A multi-agent research assistant that turns a question into a sourced report.**
+**A multi-agent research assistant that turns a question into a draft research paper.**
 
 Decompose → research in parallel → critique for gaps → synthesize. Orchestrated with
 **LangGraph**, served over **FastAPI**, model-agnostic, durable, and streamed in real time.
@@ -25,8 +25,11 @@ Decompose → research in parallel → critique for gaps → synthesize. Orchest
 Submit a research question and the system breaks it into self-contained sub-questions,
 researches each one in parallel against web and academic sources, critiques the findings
 for gaps and contradictions (looping back when the evidence is thin), then synthesizes a
-structured Markdown report with globally numbered citations. Progress streams to the client
-as it happens.
+**proposal-stage paper draft** in Markdown with globally numbered citations: an abstract,
+introduction, a literature-review body, a *Proposed Methodology* (the study to run, written
+as a proposal — no fabricated data), *Recommendations* (which surveys to administer, how to
+extend the work), and a conclusion. Everything is grounded in the sources only; no primary
+data is collected. Progress streams to the client as it happens.
 
 It's **backend only** - one backend, many frontends. A terminal CLI, an optional
 Telegram bot, and an MCP server ship in the repo; all three are *just API consumers*,
@@ -222,6 +225,14 @@ In the REPL a follow-up line
 (`and his trophies?`, `why?`) is folded into the previous question so the pipeline keeps
 the subject; `new` clears the running topic. Config can also come from `RESEARCHY_API_URL` /
 `RESEARCHY_API_KEY` (CI-friendly).
+
+**Interview intake.** For a rough topic, an interview step gathers context before the
+pipeline runs: it asks the model (`POST /research/clarify`) for a few clarifying questions
+tailored to the topic, collects your answers, then prompts for optional source URLs and
+files — all folded into one enriched query (no schema change). It's **on by default in the
+REPL** for a fresh topic (each question is skippable with Enter) and opt-in on the one-shot
+path via `ask "..." --interview`; it stays off for pipes/CI (non-interactive stdout) and
+works the same with `--local`. A failed clarify degrades to a plain ask.
 
 `--url` (repeatable, max 5) adds your own websites as research sources and `--draft FILE`
 (txt/md/pdf/docx) makes the paper build on your draft — both work with and without

@@ -108,6 +108,18 @@ def run_local(
     return _shape(query, final, report)
 
 
+def run_clarify_local(topic: str, draft: str | None = None) -> list[str]:
+    """Clarifying questions for the --local interview: build a provider from
+    settings and call the shared clarifier directly (no API round-trip). Reuses
+    the Planner's model override — the same cheap structured-JSON call."""
+    from research_assistant.agents.clarify import generate_clarifying_questions
+
+    config = config_from_settings("planner")
+    return asyncio.run(
+        generate_clarifying_questions(get_provider(config), topic, config=config, draft=draft)
+    )
+
+
 async def run_local_async(
     query: str,
     depth: str | None = None,

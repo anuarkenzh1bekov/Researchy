@@ -618,6 +618,29 @@ async def test_draft_extract_requires_auth(client):
     assert r.status_code == 401
 
 
+# --- clarify (interview) ----------------------------------------------------------
+
+
+async def test_clarify_returns_questions(client, monkeypatch):
+    """POST /research/clarify runs one LLM call (stubbed here) and returns the
+    questions — no task is created, nothing is enqueued."""
+    import research_assistant.agents.clarify as clarify_mod
+
+    async def fake_gen(provider, topic, *, config, draft=None):
+        return [f"What about {topic}?"]
+
+    monkeypatch.setattr(clarify_mod, "generate_clarifying_questions", fake_gen)
+    r = await client.post("/research/clarify", json={"topic": "remote work"}, headers=_auth())
+    assert r.status_code == 200
+    assert r.json()["questions"] == ["What about remote work?"]
+    assert client.enqueued == []  # clarify never creates/enqueues a task
+
+
+async def test_clarify_requires_auth(client):
+    r = await client.post("/research/clarify", json={"topic": "x"})
+    assert r.status_code == 401
+
+
 # --- source docs -------------------------------------------------------------------
 
 

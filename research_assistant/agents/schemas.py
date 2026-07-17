@@ -19,3 +19,10 @@ class CriticOutput(BaseModel):
     # Researcher so the retry addresses the actual weakness. Optional: a model
     # that omits it (or under-fills) still parses; the router pads with None.
     gap_reasons: list[str] = Field(default_factory=list)
+
+
+class ClarifyQuestions(BaseModel):
+    # the interview step (agents/clarify). Empty is valid — it means the model
+    # judged the topic clear enough to research as-is, so the interview skips
+    # straight to asking for sources.
+    questions: list[str] = Field(default_factory=list)

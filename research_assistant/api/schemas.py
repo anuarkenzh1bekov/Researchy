@@ -50,6 +50,20 @@ class CreateResearchRequest(BaseModel):
         return v
 
 
+class ClarifyRequest(BaseModel):
+    """A rough topic (optionally with a draft) the client wants clarifying
+    questions for, before it creates a task."""
+
+    topic: str = Field(..., min_length=1)
+    draft: str | None = Field(default=None, max_length=50_000)
+
+
+class ClarifyResponse(BaseModel):
+    # empty is a valid answer: the model judged the topic clear enough, so the
+    # client's interview skips straight to asking for sources.
+    questions: list[str] = Field(default_factory=list)
+
+
 class TaskView(BaseModel):
     id: uuid.UUID
     user_id: str

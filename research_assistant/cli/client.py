@@ -60,6 +60,15 @@ class ResearchClient:
             body["source_docs"] = source_docs
         return self._ok(self._http.post("/research", json=body))  # type: ignore[return-value]
 
+    def clarify(self, topic: str, draft: str | None = None) -> list[str]:
+        """Ask the API for clarifying questions about a topic (interview step).
+        Returns [] when the server has nothing to ask."""
+        body: dict = {"topic": topic}
+        if draft:
+            body["draft"] = draft
+        resp = self._ok(self._http.post("/research/clarify", json=body))
+        return resp.get("questions", [])  # type: ignore[union-attr]
+
     def get_task(self, task_id: str) -> dict:
         return self._ok(self._http.get(f"/research/{task_id}"))  # type: ignore[return-value]
 

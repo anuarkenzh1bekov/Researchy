@@ -89,6 +89,26 @@ def test_create_research_sends_depth():
     assert "depth" not in bodies[1]
 
 
+def test_clarify_posts_topic_and_returns_questions():
+    """`ResearchClient.clarify` rides as POST /research/clarify {topic} and
+    unwraps the `questions` list from the response."""
+    import httpx
+
+    from research_assistant.cli.client import ResearchClient
+
+    bodies: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"questions": ["Which region?"]})
+
+    client = ResearchClient(config.Config(base_url="http://test"))
+    client._http = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://test")
+    out = client.clarify("remote work")
+    assert bodies[0]["topic"] == "remote work"
+    assert out == ["Which region?"]
+
+
 def test_cancel_task_sends_delete():
     """`research cancel <id>` rides as DELETE /research/{id}."""
     import httpx
